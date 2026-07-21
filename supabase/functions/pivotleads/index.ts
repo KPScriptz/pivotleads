@@ -408,7 +408,7 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY (auto-injected by Supabase)." }, 500);
   }
 
-  let body: { targetLinks?: unknown; icpRules?: unknown; provider?: unknown; action?: unknown; lead?: Record<string, unknown>; senderContext?: unknown; mode?: unknown; rows?: unknown; enrichCap?: unknown; apolloFilters?: { sizes?: string[]; industries?: string[] }; prompt?: unknown; context?: unknown };
+  let body: { targetLinks?: unknown; icpRules?: unknown; provider?: unknown; action?: unknown; lead?: Record<string, unknown>; senderContext?: unknown; mode?: unknown; rows?: unknown; enrichCap?: unknown; apolloFilters?: { sizes?: string[]; industries?: string[] }; prompt?: unknown; context?: unknown; lead_id?: unknown; patch?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -529,6 +529,31 @@ Actions: discover = run ICP-based lead discovery; export_csv = download the curr
       return json({ reply: String(parsed.reply ?? ""), action });
     } catch (e) {
       return json({ error: `assist failed: ${e instanceof Error ? e.message : String(e)}` }, 500);
+    }
+  }
+
+  // --- Shared team progress: persist a lead's stage / tags / note / rejected flag.
+  // Uses the service role so the leads table stays read-only for the public anon key;
+  // only these four whitelisted fields can be written, never core lead data.
+  if (body.action === "update_meta") {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return json({ error: "Server not configured" }, 500);
+    const leadId = typeof body.lead_id === "string" ? body.lead_id : "";
+    if (!leadId) return json({ error: "Missing lead_id" }, 400);
+    const patch = (body.patch ?? {}) as Record<string, unknown>;
+    const allowed: Record<string, unknown> = {};
+    const STAGES = ["New", "Contacted", "Accepted", "Replied", "Won"];
+    if (typeof patch.stage === "string" && STAGES.includes(patch.stage)) allowed.stage = patch.stage;
+    if (Array.isArray(patch.tags)) allowed.tags = patch.tags.map((t) => String(t)).slice(0, 40);
+    if (typeof patch.note === "string") allowed.note = patch.note.slice(0, 5000);
+    if (typeof patch.rejected === "boolean") allowed.rejected = patch.rejected;
+    if (Object.keys(allowed).length === 0) return json({ error: "Nothing valid to update" }, 400);
+    try {
+      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      const { error } = await supabase.from("my_origami_leads").update(allowed).eq("id", leadId);
+      if (error) throw new Error(error.message);
+      return json({ ok: true });
+    } catch (e) {
+      return json({ error: `update_meta failed: ${e instanceof Error ? e.message : String(e)}` }, 500);
     }
   }
 

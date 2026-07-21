@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Search, Mail, Sparkles, Play, ExternalLink, Copy, ShieldCheck, AlertTriangle, Circle, ArrowDown, Send, Download } from 'lucide-react';
 
@@ -30,6 +30,11 @@ interface Lead {
   verified_email: string;
   email_confidence?: string;
   created_at: string;
+  // Shared team progress (persisted to the database via the edge function)
+  stage?: string;
+  tags?: string[];
+  note?: string;
+  rejected?: boolean;
 }
 
 // Email deliverability label derived from the MX check stored in email_confidence.
@@ -165,11 +170,11 @@ export default function CampaignWorkspace() {
   const [running, setRunning] = useState(false);
   const [runMsg, setRunMsg] = useState<{ type: 'idle' | 'info' | 'ok' | 'err'; text: string }>({ type: 'idle', text: '' });
 
-  // Per-lead local metadata (stage / tags / note / rejected)
-  type LeadMeta = { tags: string[]; note: string; rejected: boolean; stage?: string };
-  const EMPTY_META: LeadMeta = { tags: [], note: '', rejected: false, stage: 'New' };
-  const META_KEY = 'pivotleads_meta_v1';
-  const [meta, setMeta] = useState<Record<string, LeadMeta>>({});
+  // Per-lead progress (stage / tags / note / rejected) — lives on the lead row in
+  // the database so the whole team shares it. Reads come from the `leads` state
+  // (fetched from the DB); writes go through the edge function's service role.
+  type LeadMeta = { tags: string[]; note: string; rejected: boolean; stage: string };
+  const noteTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   // People view
   const [search, setSearch] = useState('');
@@ -204,7 +209,6 @@ export default function CampaignWorkspace() {
   /*  Persistence                                                            */
   /* ---------------------------------------------------------------------- */
   useEffect(() => {
-    try { const raw = localStorage.getItem(META_KEY); if (raw) setMeta(JSON.parse(raw)); } catch { /* ignore */ }
     try { const p = localStorage.getItem('pivotleads_pitch_v1'); if (p) setSenderPitch(p); } catch { /* ignore */ }
     try {
       const s = localStorage.getItem('pivotleads_sequence_v1');
@@ -222,14 +226,28 @@ export default function CampaignWorkspace() {
 
   const flash = (text: string) => { setToast(text); window.setTimeout(() => setToast((t) => (t === text ? '' : t)), 3200); };
 
-  const getMeta = (id: string): LeadMeta => meta[id] || EMPTY_META;
-  const updateMeta = (id: string, patch: Partial<LeadMeta>) => {
-    setMeta((prev) => {
-      const cur = prev[id] || EMPTY_META;
-      const next = { ...prev, [id]: { ...cur, ...patch } };
-      try { localStorage.setItem(META_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-      return next;
-    });
+  const getMeta = (id: string): LeadMeta => {
+    const l = leads.find((x) => x.id === id);
+    return { tags: l?.tags ?? [], note: l?.note ?? '', rejected: l?.rejected ?? false, stage: l?.stage ?? 'New' };
+  };
+  // Optimistic local update (instant UI) — used by both the DB writer and note debounce.
+  const patchLeadLocal = (id: string, patch: Partial<LeadMeta>) =>
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  // Persist a patch to the shared database (fire-and-forget; UI already updated).
+  const persistMeta = (id: string, patch: Partial<LeadMeta>) => {
+    if (!SUPABASE_ANON_KEY) return;
+    fetch(`${SUPABASE_URL}/functions/v1/pivotleads`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SUPABASE_ANON_KEY}`, apikey: SUPABASE_ANON_KEY },
+      body: JSON.stringify({ action: 'update_meta', lead_id: id, patch }),
+    }).then((r) => { if (!r.ok) console.warn('Progress save failed for', id); }).catch(() => { /* offline; local copy stands */ });
+  };
+  const updateMeta = (id: string, patch: Partial<LeadMeta>) => { patchLeadLocal(id, patch); persistMeta(id, patch); };
+  // Notes save on a short debounce so typing doesn't hammer the database.
+  const updateNote = (id: string, note: string) => {
+    patchLeadLocal(id, { note });
+    clearTimeout(noteTimers.current[id]);
+    noteTimers.current[id] = setTimeout(() => persistMeta(id, { note }), 700);
   };
   const getStage = (id: string) => getMeta(id).stage || 'New';
   const bumpSent = () => {
@@ -993,7 +1011,7 @@ export default function CampaignWorkspace() {
               {/* Notes */}
               <div>
                 <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Notes</div>
-                <textarea value={getMeta(selectedLead.id).note} onChange={(e) => updateMeta(selectedLead.id, { note: e.target.value })} placeholder="Call notes, context, next steps…" className={`w-full bg-white ${inputCls} p-2.5 text-xs h-24 resize-none`} />
+                <textarea value={getMeta(selectedLead.id).note} onChange={(e) => updateNote(selectedLead.id, e.target.value)} placeholder="Call notes, context, next steps…" className={`w-full bg-white ${inputCls} p-2.5 text-xs h-24 resize-none`} />
               </div>
 
               <div className="flex gap-2 pt-1">
