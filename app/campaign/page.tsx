@@ -128,7 +128,7 @@ const INITIAL_DEMO_LEADS: Lead[] = [
   { id: "26", person_name: "Lauren Sorenson", linkedin_url: "https://www.linkedin.com/in/laurashsor/", company_name: "Bizzabo", website_url: "https://www.linkedin.com/in/laurashsor/", fit_score: 96, buying_signal: "She owns all of Bizzabo's brand experiences, dinners (the Bizzy dinner series), third-party sponsorships, and on-site presence, making her the direct buyer for an experiential photo/AR capture activation; her background is experiential agency work running music festivals.", decision_maker_title: "Director, Brand Experience", verified_email: "lauren.sorenson@bizzabo.com", created_at: "2026-07-09T00:00:00Z" }
 ];
 
-const TABS = ['Overview', 'People', 'Template', 'Review', 'Settings'] as const;
+const TABS = ['Overview', 'People', 'Messages', 'Review', 'Settings'] as const;
 type Tab = typeof TABS[number];
 
 // Stage machine. Contacted → Accepted (connect accepted) → Replied → Won.
@@ -150,6 +150,7 @@ export default function CampaignWorkspace() {
   const [targetLinksText, setTargetLinksText] = useState('');
   const [icpRules, setIcpRules] = useState('US-based experiential technology directors or agency interactive producers who buy on-site brand-activation experiences.');
   const [apolloCap, setApolloCap] = useState(10);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [runMsg, setRunMsg] = useState<{ type: 'idle' | 'info' | 'ok' | 'err'; text: string }>({ type: 'idle', text: '' });
 
@@ -316,25 +317,25 @@ export default function CampaignWorkspace() {
   };
   useEffect(() => { fetchLiveLeads(); }, []);
 
-  const handleRun = async (mode: 'target' | 'discover' = 'target') => {
-    if (!SUPABASE_ANON_KEY) { setRunMsg({ type: 'err', text: 'Missing anon key — add NEXT_PUBLIC_SUPABASE_ANON_KEY to .env.local (and Vercel env), then restart.' }); return; }
+  const handleRun = async (mode: 'target' | 'discover' = 'target', src: 'serper' | 'apollo' = provider) => {
+    if (!SUPABASE_ANON_KEY) { setRunMsg({ type: 'err', text: 'Lead finding isn’t connected yet. Add your Supabase key and try again.' }); return; }
     const urls = targetLinksText.split('\n').map((s) => s.trim()).filter(Boolean);
-    if (mode === 'target' && urls.length === 0) { setRunMsg({ type: 'err', text: 'Add at least one company URL — or hit Discover to generate leads from your ICP.' }); return; }
+    if (mode === 'target' && urls.length === 0) { setRunMsg({ type: 'err', text: 'Paste at least one company website or LinkedIn page above first.' }); return; }
     setRunning(true);
-    setRunMsg({ type: 'info', text: mode === 'discover' ? 'Discovering from your ICP — planning searches, classifying, verifying… (~2-3 min)' : 'Running pipeline — searching, classifying, saving…' });
+    setRunMsg({ type: 'info', text: 'Finding leads — this takes about 2–3 minutes. You can keep working; new people appear here when it’s done.' });
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/pivotleads`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SUPABASE_ANON_KEY}`, apikey: SUPABASE_ANON_KEY },
-        body: JSON.stringify({ targetLinks: urls, icpRules, provider, mode, enrichCap: provider === 'apollo' ? apolloCap : undefined }),
+        body: JSON.stringify({ targetLinks: urls, icpRules, provider: src, mode, enrichCap: src === 'apollo' ? apolloCap : undefined }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
       const inserted = data?.insertedCount ?? 0;
-      setRunMsg({ type: 'ok', text: `${mode === 'discover' ? 'Discovery' : 'Pipeline'} complete — added ${inserted} new lead${inserted === 1 ? '' : 's'}.${data?.note ? ' ' + data.note : ''}` });
+      setRunMsg({ type: 'ok', text: `Done — added ${inserted} new ${inserted === 1 ? 'person' : 'people'} to your list.${data?.note ? ' ' + data.note : ''}` });
       fetchLiveLeads();
     } catch (e) {
-      setRunMsg({ type: 'err', text: `${mode === 'discover' ? 'Discovery' : 'Pipeline'} error: ${e instanceof Error ? e.message : String(e)}` });
+      setRunMsg({ type: 'err', text: `Couldn’t finish: ${e instanceof Error ? e.message : String(e)}` });
     } finally {
       setRunning(false);
     }
@@ -415,7 +416,7 @@ export default function CampaignWorkspace() {
       case 'fast_queue': openFocus(); break;
       case 'goto_overview': setActiveTab('Overview'); break;
       case 'goto_people': setActiveTab('People'); break;
-      case 'goto_template': setActiveTab('Template'); break;
+      case 'goto_template': setActiveTab('Messages'); break;
       case 'goto_review': setActiveTab('Review'); break;
       case 'goto_settings': setActiveTab('Settings'); break;
       default: break;
@@ -471,9 +472,8 @@ export default function CampaignWorkspace() {
             </div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-3 mt-1.5 text-gray-900">
               Pivot <span className="text-emerald-600">Leads</span>
-              <span className="text-[10px] font-bold tracking-wider border border-gray-200 rounded-full px-2 py-0.5 bg-gray-50 text-gray-500 uppercase">Draft</span>
             </h1>
-            <p className="text-[13px] text-gray-500 mt-2 max-w-xl leading-relaxed">A clean five-step campaign: source who you target, work the people, tune the sequence, review, and send — all manual and ToS-safe.</p>
+            <p className="text-[13px] text-gray-500 mt-2 max-w-xl leading-relaxed">Find the right people, then reach out with a personal note and email — all sent by you, in a few clicks.</p>
           </div>
           <button onClick={exportCsv} className="mt-1 bg-gray-900 hover:bg-black text-white text-xs font-semibold py-2 px-3.5 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm">
             <Icon name="download" /> Export CSV
@@ -487,7 +487,7 @@ export default function CampaignWorkspace() {
             const stepDone =
               (tab === 'Overview' && metrics.people > 0) ||
               (tab === 'People' && metrics.people > 0) ||
-              (tab === 'Template') ||
+              (tab === 'Messages') ||
               (tab === 'Review' && metrics.contacted > 0) ||
               (tab === 'Settings' && !!senderPitch);
             return (
@@ -541,66 +541,55 @@ export default function CampaignWorkspace() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Who we're targeting — ICP rules */}
-            <div className={`${cardCls} p-4`}>
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Who we&apos;re targeting</span>
-                <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5 uppercase tracking-wider">ICP</span>
-              </div>
-              <textarea
-                value={icpRules}
-                onChange={(e) => setIcpRules(e.target.value)}
-                className={`w-full ${inputCls} p-3 text-xs h-28 resize-none`}
-                placeholder="Describe the ideal buyer — role, industry, region, buying signal…"
-              />
-              <div className="text-[10px] text-gray-400 mt-1.5">Feeds Discover &amp; Apollo. The tighter this is, the sharper your leads.</div>
+          {/* Grow your list — one clear flow */}
+          <div className={`${cardCls} p-5`}>
+            <div className="text-sm font-bold text-gray-900">Find more people to reach</div>
+            <div className="text-[12px] text-gray-500 mt-0.5 mb-3">Describe who you&apos;re trying to reach, then hit Find leads. New people are added to your list automatically.</div>
+            <textarea
+              value={icpRules}
+              onChange={(e) => setIcpRules(e.target.value)}
+              className={`w-full ${inputCls} p-3 text-sm h-24 resize-none`}
+              placeholder="e.g. Event producers and creative directors at experiential marketing agencies in the US."
+            />
+            <div className="flex items-center gap-2 flex-wrap mt-3">
+              <button onClick={() => handleRun('discover', 'serper')} disabled={running} className="bg-[#48f4ad] hover:brightness-105 disabled:opacity-60 text-[#04231a] text-sm font-bold py-2.5 px-5 rounded-lg transition-all shadow-sm inline-flex items-center gap-1.5">
+                <Icon name="sparkles" className="w-4 h-4" /> {running ? 'Finding…' : 'Find leads'}
+              </button>
+              <button onClick={() => setAdvancedOpen((v) => !v)} className="text-[12px] font-semibold text-gray-500 hover:text-gray-800 px-2 py-1">{advancedOpen ? 'Hide options' : 'More options'}</button>
             </div>
+            {runMsg.type !== 'idle' && <div className={`text-[12px] font-medium mt-2.5 ${runMsg.type === 'err' ? 'text-rose-600' : runMsg.type === 'ok' ? 'text-emerald-700' : 'text-gray-500'}`}>{runMsg.text}</div>}
 
-            {/* Lead Sources manager */}
-            <div className={`${cardCls} p-4`}>
-              <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Lead sources</div>
-              <div className="grid grid-cols-2 gap-2 mb-3">
-                {([['serper', 'Serper Search', 'Web discovery → AI classify'], ['apollo', 'Apollo', 'Verified emails · uses credits']] as ['serper' | 'apollo', string, string][]).map(([id, name, sub]) => (
-                  <button key={id} onClick={() => setProvider(id)} className={`text-left rounded-xl border p-3 transition-all ${provider === id ? 'bg-emerald-50 border-emerald-300' : 'border-gray-200 hover:bg-gray-50'}`}>
-                    <div className="flex items-center justify-between">
-                      <span className={`text-xs font-bold ${provider === id ? 'text-emerald-700' : 'text-gray-800'}`}>{name}</span>
-                      <span className={`text-[8px] font-black tracking-wider px-1 py-px rounded ${provider === id ? 'bg-[#48f4ad] text-[#04231a]' : 'bg-gray-100 text-gray-500'}`}>{provider === id ? 'ENROLLED' : 'LIVE'}</span>
-                    </div>
-                    <div className="text-[10px] text-gray-500 mt-1 leading-snug">{sub}</div>
-                  </button>
-                ))}
-              </div>
-              {provider === 'serper' ? (
-                <textarea
-                  value={targetLinksText}
-                  onChange={(e) => setTargetLinksText(e.target.value)}
-                  placeholder="Target company URLs (one per line) — e.g. https://www.linkedin.com/company/jack-morton/"
-                  className={`w-full ${inputCls} p-2.5 text-[11px] font-mono h-16 resize-none mb-2`}
-                />
-              ) : (
-                <div className="flex items-center gap-2 text-[11px] text-gray-500 mb-2 flex-wrap">
-                  <span className="text-emerald-700 font-semibold">Apollo reveals verified emails</span><span>— capped at</span>
-                  <input type="number" min={1} max={25} value={apolloCap} onChange={(e) => setApolloCap(Math.max(1, Math.min(25, Number(e.target.value) || 1)))} className={`w-14 ${inputCls} px-2 py-0.5`} />
-                  <span>credit{apolloCap === 1 ? '' : 's'} / run.</span>
+            {advancedOpen && (
+              <div className="mt-4 pt-4 border-t border-gray-100 space-y-4">
+                <div>
+                  <div className="text-[12px] font-semibold text-gray-700 mb-1">Target specific companies</div>
+                  <div className="text-[11px] text-gray-500 mb-1.5">Paste company websites or LinkedIn pages (one per line) to find people who work there.</div>
+                  <textarea
+                    value={targetLinksText}
+                    onChange={(e) => setTargetLinksText(e.target.value)}
+                    placeholder="https://www.linkedin.com/company/jack-morton/"
+                    className={`w-full ${inputCls} p-2.5 text-xs h-16 resize-none`}
+                  />
+                  <button onClick={() => handleRun('target', 'serper')} disabled={running} className="mt-2 border border-gray-200 bg-white text-gray-700 text-xs font-semibold py-2 px-4 rounded-lg hover:bg-gray-50 disabled:opacity-50">Find people at these companies</button>
                 </div>
-              )}
-              <div className="flex items-center gap-2 flex-wrap">
-                <button onClick={() => handleRun('target')} disabled={running} className="bg-[#48f4ad] hover:brightness-105 disabled:opacity-50 text-[#04231a] text-xs font-bold py-2 px-4 rounded-lg transition-all shadow-sm">{running ? 'Working…' : 'Run target list'}</button>
-                <button onClick={() => handleRun('discover')} disabled={running} className="border border-emerald-300 bg-emerald-50 text-emerald-700 text-xs font-bold py-2 px-4 rounded-lg transition-all hover:bg-emerald-100 disabled:opacity-50">Discover from ICP</button>
-              </div>
-              {runMsg.type !== 'idle' && <div className={`text-[11px] font-medium mt-2 ${runMsg.type === 'err' ? 'text-rose-600' : runMsg.type === 'ok' ? 'text-emerald-600' : 'text-gray-500'}`}>{runMsg.text}</div>}
-              {sourceCounts.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-gray-100">
-                  <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Enrolled accounts</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {sourceCounts.map(([name, n]) => (
-                      <span key={name} className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border border-gray-200 text-gray-600 bg-gray-50">{name}<span className="text-emerald-600">{n}</span></span>
-                    ))}
-                  </div>
+                <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
+                  <div className="text-[12px] font-semibold text-amber-800">Verified-email finder</div>
+                  <div className="text-[11px] text-amber-700 mt-0.5 mb-2">Pulls contacts with confirmed email addresses. Uses paid credits, so use it sparingly.</div>
+                  <button onClick={() => handleRun('discover', 'apollo')} disabled={running} className="border border-amber-300 bg-white text-amber-800 text-xs font-semibold py-2 px-4 rounded-lg hover:bg-amber-100 disabled:opacity-50">Find verified-email leads</button>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+
+            {sourceCounts.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Companies in your list</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {sourceCounts.map(([name, n]) => (
+                    <span key={name} className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full border border-gray-200 text-gray-600 bg-gray-50">{name}<span className="text-emerald-600">{n}</span></span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -710,78 +699,70 @@ export default function CampaignWorkspace() {
       )}
 
       {/* ================= TEMPLATE (LinkedIn + Email dual sequence) ================= */}
-      {activeTab === 'Template' && (
+      {activeTab === 'Messages' && (
         <div className="mx-8 mt-6 mb-8">
           <div className="flex items-start justify-between gap-3 flex-wrap mb-5">
             <div>
-              <div className="text-sm font-bold text-gray-900">Sequence builder</div>
-              <div className="text-[11px] text-gray-500 mt-0.5">A two-step LinkedIn + Email flow. Toggle each node between channels. Fields like <code className="text-emerald-600">{'{first_name}'}</code> <code className="text-emerald-600">{'{company}'}</code> <code className="text-emerald-600">{'{title}'}</code> are personalized. Preview: {sampleLead ? sampleLead.person_name : 'a sample lead'}.</div>
+              <div className="text-sm font-bold text-gray-900">Your messages</div>
+              <div className="text-[12px] text-gray-500 mt-0.5">The two messages you send each person: a LinkedIn note and an intro email. Green words like <span className="text-emerald-600 font-semibold">first name</span> and <span className="text-emerald-600 font-semibold">company</span> fill in automatically for each lead. Preview shows {sampleLead ? sampleLead.person_name : 'a sample lead'}.</div>
             </div>
-            <button onClick={() => saveSequence(DEFAULT_SEQUENCE)} className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Reset to defaults</button>
+            <button onClick={() => saveSequence(DEFAULT_SEQUENCE)} className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Reset to default</button>
           </div>
 
           <div className="max-w-3xl mx-auto">
-            {sequence.map((node, i) => (
-              <div key={node.key}>
-                <div className={`${cardCls} overflow-hidden`}>
-                  {/* Node header */}
-                  <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <span className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-black bg-[#48f4ad] text-[#04231a]">{i + 1}</span>
+            {sequence.map((node, i) => {
+              const kind: Channel = i === 0 ? 'linkedin' : 'email';
+              const label = kind === 'linkedin' ? 'LinkedIn connection note' : 'Intro email';
+              const bodyVal = kind === 'linkedin' ? node.linkedin : node.email;
+              const setBody = (v: string) => updateNode(i, kind === 'linkedin' ? { linkedin: v } : { email: v });
+              const chips: [string, string][] = [['{first_name}', 'First name'], ['{company}', 'Company'], ['{title}', 'Title']];
+              return (
+                <div key={node.key}>
+                  <div className={`${cardCls} overflow-hidden`}>
+                    <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50">
+                      <span className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-black bg-[#48f4ad] text-[#04231a]"><Icon name={kind === 'linkedin' ? 'linkedin' : 'mail'} className="w-3.5 h-3.5" /></span>
+                      <div className="text-sm font-bold text-gray-900">{label}</div>
+                    </div>
+                    <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
                       <div>
-                        <div className="text-sm font-bold text-gray-900">Step {i + 1} · {node.title}</div>
-                        <div className="text-[10px] text-gray-400">{node.channel === 'linkedin' ? 'LinkedIn message' : 'Email draft'}</div>
-                      </div>
-                    </div>
-                    {/* Channel toggle */}
-                    <div className="inline-flex p-0.5 rounded-lg bg-gray-100 border border-gray-200">
-                      {(['linkedin', 'email'] as Channel[]).map((ch) => (
-                        <button key={ch} onClick={() => updateNode(i, { channel: ch })} className={`px-2.5 py-1 rounded-md text-[11px] font-bold inline-flex items-center gap-1.5 transition-all ${node.channel === ch ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                          <Icon name={ch === 'linkedin' ? 'linkedin' : 'mail'} className="w-3 h-3" />{ch === 'linkedin' ? 'LinkedIn' : 'Email'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Node body */}
-                  <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <div>
-                      {node.channel === 'email' && (
-                        <div className="mb-2">
-                          <div className="text-[9px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Subject</div>
-                          <input value={node.subject} onChange={(e) => updateNode(i, { subject: e.target.value })} className={`w-full ${inputCls} px-2.5 py-1.5 text-xs`} />
+                        {kind === 'email' && (
+                          <div className="mb-2">
+                            <div className="text-[11px] font-semibold text-gray-500 mb-1">Subject line</div>
+                            <input value={node.subject} onChange={(e) => updateNode(i, { subject: e.target.value })} className={`w-full ${inputCls} px-2.5 py-1.5 text-xs`} />
+                          </div>
+                        )}
+                        <div className="text-[11px] font-semibold text-gray-500 mb-1">Message</div>
+                        <textarea value={bodyVal} onChange={(e) => setBody(e.target.value)} className={`w-full ${inputCls} p-2.5 text-xs h-36 resize-none`} />
+                        <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                          <span className="text-[10px] text-gray-400">Insert:</span>
+                          {chips.map(([token, lbl]) => (
+                            <button key={token} onClick={() => setBody((bodyVal ? bodyVal + ' ' : '') + token)} className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5 hover:bg-emerald-100">+ {lbl}</button>
+                          ))}
                         </div>
-                      )}
-                      <div className="text-[9px] uppercase tracking-wider text-gray-400 font-semibold mb-1">{node.channel === 'linkedin' ? 'LinkedIn message' : 'Email body'}</div>
-                      <textarea
-                        value={node.channel === 'linkedin' ? node.linkedin : node.email}
-                        onChange={(e) => updateNode(i, node.channel === 'linkedin' ? { linkedin: e.target.value } : { email: e.target.value })}
-                        className={`w-full ${inputCls} p-2.5 text-xs h-36 resize-none`}
-                      />
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[9px] uppercase tracking-wider text-gray-400 font-semibold">Preview</span>
-                        <button onClick={() => copy(renderFor(node.channel === 'linkedin' ? node.linkedin : node.email, sampleLead))} className="text-[10px] font-semibold text-emerald-600 hover:underline">Copy rendered</button>
                       </div>
-                      {node.channel === 'email' && <div className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 mb-2"><span className="text-gray-400">Subject: </span><Highlight text={node.subject} /></div>}
-                      <div className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-2.5 whitespace-pre-wrap min-h-[9rem] leading-relaxed">
-                        <Highlight text={node.channel === 'linkedin' ? node.linkedin : node.email} />
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[11px] font-semibold text-gray-500">Preview</span>
+                          <button onClick={() => copy(renderFor(bodyVal, sampleLead))} className="text-[11px] font-semibold text-emerald-600 hover:underline">Copy</button>
+                        </div>
+                        {kind === 'email' && <div className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 mb-2"><span className="text-gray-400">Subject: </span><Highlight text={node.subject} /></div>}
+                        <div className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-2.5 whitespace-pre-wrap min-h-[9rem] leading-relaxed">
+                          <Highlight text={bodyVal} />
+                        </div>
                       </div>
                     </div>
                   </div>
+                  {i < sequence.length - 1 && (
+                    <div className="flex flex-col items-center py-1">
+                      <div className="w-px h-4 bg-emerald-200" />
+                      <span className="w-6 h-6 rounded-full flex items-center justify-center bg-emerald-50 border border-emerald-200 text-emerald-600"><Icon name="down" className="w-3.5 h-3.5" /></span>
+                      <div className="w-px h-4 bg-emerald-200" />
+                    </div>
+                  )}
                 </div>
-                {/* Connector */}
-                {i < sequence.length - 1 && (
-                  <div className="flex flex-col items-center py-1">
-                    <div className="w-px h-4 bg-emerald-200" />
-                    <span className="w-6 h-6 rounded-full flex items-center justify-center bg-emerald-50 border border-emerald-200 text-emerald-600"><Icon name="down" className="w-3.5 h-3.5" /></span>
-                    <div className="w-px h-4 bg-emerald-200" />
-                  </div>
-                )}
-              </div>
-            ))}
-            <div className="text-[10px] text-gray-400 mt-4 text-center">Step 1 is what &ldquo;Ready to send&rdquo; and the Fast Queue use for the LinkedIn invite; the email step drives the mailto draft.</div>
+              );
+            })}
+            <div className="text-[11px] text-gray-400 mt-4 text-center">These are used when you hit &ldquo;Ready to send&rdquo; and in the Fast queue — the note is copied for LinkedIn, the email opens a draft.</div>
           </div>
         </div>
       )}
@@ -842,30 +823,19 @@ export default function CampaignWorkspace() {
       {activeTab === 'Settings' && (
         <div className="mx-8 mt-6 mb-8 grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className={`${cardCls} p-4 lg:col-span-2`}>
-            <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Your pitch — feeds AI outreach</div>
-            <div className="text-[11px] text-gray-500 mb-2">A line or two on what you offer. Every AI-drafted note &amp; email is tailored around this.</div>
-            <textarea value={senderPitch} onChange={(e) => savePitch(e.target.value)} placeholder="e.g. We build a photo/AR brand-activation product that makes live events more interactive and shareable." className={`w-full ${inputCls} p-2.5 text-xs h-20 resize-none`} />
-            <div className="text-[10px] text-gray-400 mt-1">Saved locally. Leave blank to use the built-in default.</div>
+            <div className="text-sm font-bold text-gray-900 mb-1">What you offer</div>
+            <div className="text-[12px] text-gray-500 mb-2">One or two sentences about what you do. The AI uses this to write your outreach.</div>
+            <textarea value={senderPitch} onChange={(e) => savePitch(e.target.value)} placeholder="e.g. We build a photo/AR experience that makes live events more interactive and shareable." className={`w-full ${inputCls} p-2.5 text-sm h-20 resize-none`} />
           </div>
           <div className={`${cardCls} p-4`}>
-            <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-3">Default source</div>
-            <div className="flex gap-1.5 mb-4">
-              {(['serper', 'apollo'] as const).map((p) => (
-                <button key={p} onClick={() => setProvider(p)} className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${provider === p ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>{p === 'serper' ? 'Serper' : 'Apollo'}</button>
-              ))}
-            </div>
-            <div className="text-[11px] text-gray-500 mb-1.5">Apollo reveal cap (credits per run)</div>
-            <input type="number" min={1} max={25} value={apolloCap} onChange={(e) => setApolloCap(Math.max(1, Math.min(25, Number(e.target.value) || 1)))} className={`w-20 ${inputCls} px-2 py-1 text-xs`} />
+            <div className="text-sm font-bold text-gray-900 mb-1">Today&apos;s pace</div>
+            <div className="text-[13px] text-gray-800 font-semibold"><span className={sentToday >= 20 ? 'text-rose-600' : 'text-emerald-600'}>{sentToday}</span> / about 20 sent today</div>
+            <div className="text-[12px] text-gray-500 mt-1 leading-relaxed">Try to stay under ~20 a day (and ~100 LinkedIn invites a week) so your account stays healthy. You send everything by hand — nothing is automated.</div>
           </div>
           <div className={`${cardCls} p-4`}>
-            <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Daily pace</div>
-            <div className="text-[12px] text-gray-800 font-semibold"><span className={sentToday >= 20 ? 'text-rose-600' : 'text-emerald-600'}>{sentToday}</span> / ~20 sent today</div>
-            <div className="text-[11px] text-gray-500 mt-1 leading-relaxed">Every &ldquo;Ready to send&rdquo; and Fast Queue send counts here. Keep under ~20/day and ~100 invites/week to protect your LinkedIn account. Nothing is automated — you send by hand.</div>
-          </div>
-          <div className={`${cardCls} p-4 lg:col-span-2`}>
-            <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-3">Data</div>
-            <button onClick={exportCsv} className="text-[11px] font-bold px-3 py-1.5 rounded-lg bg-gray-900 hover:bg-black text-white">Export leads (CSV)</button>
-            <div className="text-[10px] text-gray-400 mt-2">Tags, notes, stages &amp; the sequence are stored in THIS browser (localStorage). Your leads live in the database.</div>
+            <div className="text-sm font-bold text-gray-900 mb-2">Your data</div>
+            <button onClick={exportCsv} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-gray-900 hover:bg-black text-white">Download leads (CSV)</button>
+            <div className="text-[12px] text-gray-500 mt-2 leading-relaxed">Your leads are saved safely in the database. Tags, notes, and your messages are kept in this browser.</div>
           </div>
         </div>
       )}
@@ -890,7 +860,7 @@ export default function CampaignWorkspace() {
               onChange={(e) => setCmd(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') runCommand(); }}
               disabled={cmdBusy}
-              placeholder={cmdBusy ? 'Claude is working…' : 'Ask Origami / Claude to work on this campaign…'}
+              placeholder={cmdBusy ? 'Claude is working…' : 'Ask Claude for help… e.g. “who should I contact first?”'}
               className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-60"
             />
             <button onClick={runCommand} disabled={cmdBusy} className="shrink-0 inline-flex items-center gap-1.5 text-[11px] font-bold text-white bg-gray-900 rounded-full px-3 py-1.5 hover:bg-black disabled:opacity-50">
