@@ -179,6 +179,8 @@ export default function CampaignWorkspace() {
 
   // AI command bar
   const [cmd, setCmd] = useState('');
+  const [cmdBusy, setCmdBusy] = useState(false);
+  const [aiReply, setAiReply] = useState('');
 
   // Fast queue (focus mode)
   const [focusOpen, setFocusOpen] = useState(false);
@@ -404,19 +406,52 @@ export default function CampaignWorkspace() {
   };
 
   /* ---------------------------------------------------------------------- */
-  /*  AI command bar — local intent router (no fabricated backend)           */
+  /*  AI command bar — asks Claude (edge function 'assist'), applies actions  */
   /* ---------------------------------------------------------------------- */
-  const runCommand = () => {
-    const t = cmd.trim(); if (!t) return;
-    const low = t.toLowerCase();
-    const tabHit = TABS.find((tb) => low.includes(tb.toLowerCase()));
-    if (low.includes('discover')) { setActiveTab('Overview'); handleRun('discover'); }
-    else if (low.includes('export')) { exportCsv(); }
-    else if (low.includes('fast') || low.includes('queue')) { openFocus(); }
-    else if (low.includes('template') || low.includes('sequence')) { setActiveTab('Template'); flash('Opened the Template sequence builder.'); }
-    else if (tabHit) { setActiveTab(tabHit); flash(`Switched to ${tabHit}.`); }
-    else { flash("I can: 'discover leads', 'export csv', 'open fast queue', or jump to a tab (e.g. 'people')."); }
-    setCmd('');
+  const applyAiAction = (action: string) => {
+    switch (action) {
+      case 'discover': setActiveTab('Overview'); handleRun('discover'); break;
+      case 'export_csv': exportCsv(); break;
+      case 'fast_queue': openFocus(); break;
+      case 'goto_overview': setActiveTab('Overview'); break;
+      case 'goto_people': setActiveTab('People'); break;
+      case 'goto_template': setActiveTab('Template'); break;
+      case 'goto_review': setActiveTab('Review'); break;
+      case 'goto_settings': setActiveTab('Settings'); break;
+      default: break;
+    }
+  };
+  const runCommand = async () => {
+    const t = cmd.trim();
+    if (!t || cmdBusy) return;
+    if (!SUPABASE_ANON_KEY) { setAiReply('Claude isn’t configured yet — add NEXT_PUBLIC_SUPABASE_ANON_KEY (and the ANTHROPIC_API_KEY Supabase secret) to enable the AI copilot.'); return; }
+    setCmd(''); setCmdBusy(true); setAiReply('');
+    try {
+      const context = {
+        tab: activeTab,
+        provider,
+        people: metrics.people,
+        contacted: metrics.contacted,
+        connect_accepted: metrics.accepted,
+        replied: metrics.replied,
+        icp: icpRules,
+        top_companies: sourceCounts.map(([n, c]) => `${n} (${c})`),
+        sample_lead: sampleLead ? { name: sampleLead.person_name, title: sampleLead.decision_maker_title, company: sampleLead.company_name } : null,
+      };
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/pivotleads`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SUPABASE_ANON_KEY}`, apikey: SUPABASE_ANON_KEY },
+        body: JSON.stringify({ action: 'assist', prompt: t, senderContext: senderPitch || undefined, context }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
+      setAiReply(data?.reply || 'Done.');
+      if (data?.action && data.action !== 'none') applyAiAction(data.action);
+    } catch (e) {
+      setAiReply(`Couldn’t reach Claude: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setCmdBusy(false);
+    }
   };
 
   /* ====================================================================== */
@@ -838,17 +873,29 @@ export default function CampaignWorkspace() {
       {/* ================= FLOATING AI COMMAND BAR ================= */}
       <div className="fixed bottom-0 inset-x-0 z-40 pointer-events-none px-4 pb-4">
         <div className="pointer-events-auto mx-auto max-w-2xl">
+          {aiReply && (
+            <div className="mb-2 rounded-2xl bg-white border border-gray-200 shadow-lg p-3">
+              <div className="flex items-start gap-2">
+                <span className="mt-0.5 shrink-0 text-emerald-600"><Icon name="sparkles" className="w-4 h-4" /></span>
+                <div className="flex-1 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">{aiReply}</div>
+                <button onClick={() => setAiReply('')} className="shrink-0 text-gray-400 hover:text-gray-700 text-sm leading-none">✕</button>
+              </div>
+            </div>
+          )}
           {toast && <div className="mb-2 text-center"><span className="inline-block text-[11px] font-semibold text-white bg-gray-900 rounded-full px-3 py-1.5 shadow-lg">{toast}</span></div>}
           <div className="flex items-center gap-2 rounded-full bg-white/90 backdrop-blur border border-gray-200 shadow-lg pl-4 pr-2 py-2">
-            <Icon name="sparkles" className="w-4 h-4 text-emerald-600 shrink-0" />
+            <Icon name="sparkles" className={`w-4 h-4 shrink-0 ${cmdBusy ? 'text-emerald-400 animate-pulse' : 'text-emerald-600'}`} />
             <input
               value={cmd}
               onChange={(e) => setCmd(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') runCommand(); }}
-              placeholder="Ask Origami / Claude to work on this campaign…"
-              className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none"
+              disabled={cmdBusy}
+              placeholder={cmdBusy ? 'Claude is working…' : 'Ask Origami / Claude to work on this campaign…'}
+              className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-60"
             />
-            <button onClick={runCommand} className="shrink-0 inline-flex items-center gap-1.5 text-[11px] font-bold text-white bg-gray-900 rounded-full px-3 py-1.5 hover:bg-black"><Icon name="send" className="w-3 h-3" /> Run</button>
+            <button onClick={runCommand} disabled={cmdBusy} className="shrink-0 inline-flex items-center gap-1.5 text-[11px] font-bold text-white bg-gray-900 rounded-full px-3 py-1.5 hover:bg-black disabled:opacity-50">
+              <Icon name="send" className="w-3 h-3" /> {cmdBusy ? 'Thinking…' : 'Run'}
+            </button>
           </div>
         </div>
       </div>
