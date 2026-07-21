@@ -36,16 +36,18 @@ export default function LoginPage() {
           <div className="text-2xl font-bold tracking-tight text-gray-900 mt-1">Pivot <span className="text-emerald-600">Leads</span></div>
         </div>
         <form onSubmit={submit} className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
-          <label className="block text-sm font-semibold text-gray-800 mb-1.5">Team password</label>
+          <label className="block text-sm font-semibold text-gray-800 mb-1.5">Team PIN</label>
           <input
             type="password"
+            inputMode="numeric"
+            autoComplete="off"
             value={pw}
             autoFocus
             onChange={(e) => { setPw(e.target.value); setErr(false); }}
-            placeholder="Enter the password"
-            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+            placeholder="Enter your PIN"
+            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-center tracking-[0.4em] text-lg text-gray-900 placeholder:text-gray-400 placeholder:tracking-normal placeholder:text-sm focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
           />
-          {err && <div className="text-[13px] text-rose-600 mt-2">That password isn&apos;t right. Try again.</div>}
+          {err && <div className="text-[13px] text-rose-600 mt-2">That PIN isn&apos;t right. Try again.</div>}
           <button
             type="submit"
             disabled={busy || !pw}
@@ -54,7 +56,7 @@ export default function LoginPage() {
             {busy ? 'Checking…' : 'Enter'}
           </button>
         </form>
-        <div className="text-center text-[11px] text-gray-400 mt-4">Private beta — ask your team for the password.</div>
+        <div className="text-center text-[11px] text-gray-400 mt-4">Private beta — ask your team for the PIN.</div>
       </div>
     </div>
   );
