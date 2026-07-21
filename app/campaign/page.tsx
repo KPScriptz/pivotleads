@@ -194,6 +194,10 @@ export default function CampaignWorkspace() {
   const [sentToday, setSentToday] = useState(0);
   const [dailyTarget, setDailyTarget] = useState(25);
   const [toast, setToast] = useState('');
+  // Email preferences: which client opens, and a CAN-SPAM compliance footer.
+  const [mailClient, setMailClient] = useState<'gmail' | 'outlook' | 'default'>('gmail');
+  const DEFAULT_FOOTER = "—\nYou're receiving this because I thought it could be relevant to your work at {company}. If you'd prefer not to hear from me, just reply \"unsubscribe\" and I won't reach out again.\n[Your company] · [Your mailing address]";
+  const [emailFooter, setEmailFooter] = useState(DEFAULT_FOOTER);
 
   // AI command bar
   const [cmd, setCmd] = useState('');
@@ -222,6 +226,8 @@ export default function CampaignWorkspace() {
     } catch { /* ignore */ }
     try { const s = localStorage.getItem('pivotleads_sent_v1'); if (s) { const o = JSON.parse(s); const today = new Date().toISOString().slice(0, 10); setSentToday(o.date === today ? o.count : 0); } } catch { /* ignore */ }
     try { const t = localStorage.getItem('pivotleads_target_v1'); if (t) setDailyTarget(Math.max(1, Math.min(200, Number(t) || 25))); } catch { /* ignore */ }
+    try { const m = localStorage.getItem('pivotleads_mailclient_v1'); if (m === 'gmail' || m === 'outlook' || m === 'default') setMailClient(m); } catch { /* ignore */ }
+    try { const f = localStorage.getItem('pivotleads_footer_v1'); if (f !== null) setEmailFooter(f); } catch { /* ignore */ }
   }, []);
 
   const flash = (text: string) => { setToast(text); window.setTimeout(() => setToast((t) => (t === text ? '' : t)), 3200); };
@@ -264,6 +270,8 @@ export default function CampaignWorkspace() {
 
   const copy = (text: string) => { try { navigator.clipboard.writeText(text); } catch { /* ignore */ } };
   const savePitch = (p: string) => { setSenderPitch(p); try { localStorage.setItem('pivotleads_pitch_v1', p); } catch { /* ignore */ } };
+  const saveMailClient = (c: 'gmail' | 'outlook' | 'default') => { setMailClient(c); try { localStorage.setItem('pivotleads_mailclient_v1', c); } catch { /* ignore */ } };
+  const saveEmailFooter = (f: string) => { setEmailFooter(f); try { localStorage.setItem('pivotleads_footer_v1', f); } catch { /* ignore */ } };
   const saveDailyTarget = (n: number) => { const v = Math.max(1, Math.min(200, Math.round(n) || 25)); setDailyTarget(v); try { localStorage.setItem('pivotleads_target_v1', String(v)); } catch { /* ignore */ } };
   const saveSequence = (s: SeqNode[]) => { setSequence(s); try { localStorage.setItem('pivotleads_sequence_v1', JSON.stringify(s)); } catch { /* ignore */ } };
   const updateNode = (i: number, patch: Partial<SeqNode>) => saveSequence(sequence.map((n, j) => (j === i ? { ...n, ...patch } : n)));
@@ -284,10 +292,19 @@ export default function CampaignWorkspace() {
   const inviteNode = sequence[0];
   const emailNode = sequence.find((n) => n.channel === 'email') || sequence[0];
   const inmailNode = sequence.find((n) => n.channel === 'inmail') || DEFAULT_SEQUENCE[2];
-  const mailtoFor = (l: Lead, node: SeqNode) => {
+  // Build an email-compose URL for the user's chosen client, with the CAN-SPAM
+  // footer appended so every emailed draft carries an opt-out + address line.
+  const emailUrl = (l: Lead, node: SeqNode) => {
+    const to = l.verified_email || '';
     const subject = renderFor(node.subject || 'Quick idea for {company}', l);
-    const body = renderFor(node.email, l);
-    return `mailto:${l.verified_email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    const footer = emailFooter.trim() ? `\n\n${renderFor(emailFooter, l)}` : '';
+    const body = `${renderFor(node.email, l)}${footer}`;
+    const s = encodeURIComponent(subject);
+    const b = encodeURIComponent(body);
+    const t = encodeURIComponent(to);
+    if (mailClient === 'gmail') return `https://mail.google.com/mail/?view=cm&fs=1&to=${t}&su=${s}&body=${b}`;
+    if (mailClient === 'outlook') return `https://outlook.office.com/mail/deeplink/compose?to=${t}&subject=${s}&body=${b}`;
+    return `mailto:${to}?subject=${s}&body=${b}`;
   };
 
   // Point-5 action: "Ready to send" fires the REAL LinkedIn copy + Email mailto.
@@ -295,7 +312,7 @@ export default function CampaignWorkspace() {
     copy(renderFor(inviteNode.linkedin, l));
     const first = (l.person_name || '').split(' ')[0] || 'lead';
     if (l.verified_email) {
-      window.open(mailtoFor(l, emailNode), '_blank');
+      window.open(emailUrl(l, emailNode), '_blank');
       flash(`Copied LinkedIn invite for ${first} + opened email draft. Marked Contacted.`);
     } else {
       window.open(linkedInHref(l), '_blank', 'noopener');
@@ -424,7 +441,7 @@ export default function CampaignWorkspace() {
     setFocusQueue(queue); setFocusIdx(0); setFocusOpen(true);
   };
   const focusNext = () => setFocusIdx((i) => i + 1);
-  const focusEmail = (l: Lead) => { if (!l.verified_email) return; window.open(mailtoFor(l, emailNode), '_blank'); };
+  const focusEmail = (l: Lead) => { if (!l.verified_email) return; window.open(emailUrl(l, emailNode), '_blank'); };
   const focusLinkedIn = (l: Lead) => { copy(renderFor(inviteNode.linkedin, l)); window.open(linkedInHref(l), '_blank', 'noopener'); };
   useEffect(() => {
     if (!focusOpen) return;
@@ -515,7 +532,7 @@ export default function CampaignWorkspace() {
   return (
     <div className="min-h-screen font-sans text-gray-900 antialiased bg-[#F4F5F7] pb-28">
       {/* Campaign header */}
-      <div className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-gray-200 px-8 pt-6 pb-3">
+      <div className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-gray-200 px-4 sm:px-8 pt-5 sm:pt-6 pb-3">
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-[11px] uppercase tracking-[0.16em] text-emerald-600 font-bold flex items-center gap-1.5">
@@ -560,7 +577,7 @@ export default function CampaignWorkspace() {
 
       {/* ================= OVERVIEW ================= */}
       {activeTab === 'Overview' && (
-        <div className="mx-8 mt-6 mb-6 space-y-4">
+        <div className="mx-4 sm:mx-8 mt-6 mb-6 space-y-4">
           {/* 4-card metric summary */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {([
@@ -647,7 +664,7 @@ export default function CampaignWorkspace() {
 
       {/* ================= PEOPLE ================= */}
       {activeTab === 'People' && (
-        <div className="mx-8 mt-6 mb-6 space-y-4">
+        <div className="mx-4 sm:mx-8 mt-6 mb-6 space-y-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="relative w-full max-w-sm">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"><Icon name="search" className="w-3.5 h-3.5" /></span>
@@ -679,10 +696,10 @@ export default function CampaignWorkspace() {
                   <tr className="bg-gray-50 border-b border-gray-200 text-gray-400 font-semibold tracking-wider uppercase text-[11px]">
                     <th className="px-4 py-3.5 w-8"><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll} className="rounded border-gray-300 accent-[#059669] cursor-pointer" /></th>
                     <th className="px-4 py-3.5 w-72">Person</th>
-                    <th className="px-4 py-3.5 w-40">Company</th>
+                    <th className="px-4 py-3.5 w-40 hidden sm:table-cell">Company</th>
                     <th className="px-4 py-3.5 w-44">Status</th>
-                    <th className="px-4 py-3.5">Why them</th>
-                    <th className="px-4 py-3.5 text-right w-24">Created</th>
+                    <th className="px-4 py-3.5 hidden md:table-cell">Why them</th>
+                    <th className="px-4 py-3.5 text-right w-24 hidden lg:table-cell">Created</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -720,7 +737,7 @@ export default function CampaignWorkspace() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3.5 text-gray-700 font-medium">{lead.company_name}</td>
+                        <td className="px-4 py-3.5 text-gray-700 font-medium hidden sm:table-cell">{lead.company_name}</td>
                         <td className="px-4 py-3.5" onClick={(e) => e.stopPropagation()}>
                           {contacted ? (
                             <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-gray-600">
@@ -732,13 +749,13 @@ export default function CampaignWorkspace() {
                             </button>
                           )}
                         </td>
-                        <td className="px-4 py-3.5">
+                        <td className="px-4 py-3.5 hidden md:table-cell">
                           <div className="flex items-start gap-2 max-w-xl">
                             <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded-md shrink-0 tracking-tight uppercase mt-0.5">{lead.fit_score} Fit</span>
                             <span className="text-gray-500 font-medium leading-relaxed block pl-1">{lead.buying_signal}</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3.5 text-right text-gray-400 font-medium tracking-tight">{(lead.created_at || '').slice(0, 10)}</td>
+                        <td className="px-4 py-3.5 text-right text-gray-400 font-medium tracking-tight hidden lg:table-cell">{(lead.created_at || '').slice(0, 10)}</td>
                       </tr>
                     );
                   })}
@@ -751,7 +768,7 @@ export default function CampaignWorkspace() {
 
       {/* ================= TEMPLATE (LinkedIn + Email dual sequence) ================= */}
       {activeTab === 'Messages' && (
-        <div className="mx-8 mt-6 mb-8">
+        <div className="mx-4 sm:mx-8 mt-6 mb-8">
           <div className="flex items-start justify-between gap-3 flex-wrap mb-5">
             <div>
               <div className="text-sm font-bold text-gray-900">Your messages</div>
@@ -834,7 +851,7 @@ export default function CampaignWorkspace() {
         const attention = [...undeliverable, ...noEmail].filter((l, i, arr) => arr.findIndex((x) => x.id === l.id) === i);
         const total = active.length || 1;
         return (
-          <div className="mx-8 mt-6 mb-8 space-y-4">
+          <div className="mx-4 sm:mx-8 mt-6 mb-8 space-y-4">
             <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-5 flex items-center justify-between gap-3 flex-wrap">
               <div>
                 <div className="text-[11px] uppercase tracking-wider text-emerald-700 font-bold">Ready to contact</div>
@@ -879,11 +896,25 @@ export default function CampaignWorkspace() {
 
       {/* ================= SETTINGS ================= */}
       {activeTab === 'Settings' && (
-        <div className="mx-8 mt-6 mb-8 grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="mx-4 sm:mx-8 mt-6 mb-8 grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className={`${cardCls} p-4 lg:col-span-2`}>
             <div className="text-sm font-bold text-gray-900 mb-1">What you offer</div>
             <div className="text-[12px] text-gray-500 mb-2">One or two sentences about what you do. The AI uses this to write your outreach.</div>
             <textarea value={senderPitch} onChange={(e) => savePitch(e.target.value)} placeholder="e.g. We build a photo/AR experience that makes live events more interactive and shareable." className={`w-full ${inputCls} p-2.5 text-sm h-20 resize-none`} />
+          </div>
+          <div className={`${cardCls} p-4 lg:col-span-2`}>
+            <div className="text-sm font-bold text-gray-900 mb-1">Email</div>
+            <div className="text-[12px] text-gray-500 mb-3">Where your &ldquo;Email&rdquo; buttons open, and the footer added to every email you send.</div>
+            <div className="text-[12px] font-semibold text-gray-600 mb-1.5">Open emails in</div>
+            <div className="inline-flex rounded-lg border border-gray-200 bg-gray-100 p-0.5 mb-1.5">
+              {([['gmail', 'Gmail'], ['outlook', 'Outlook'], ['default', 'Mail app']] as ['gmail' | 'outlook' | 'default', string][]).map(([id, label]) => (
+                <button key={id} onClick={() => saveMailClient(id)} className={`px-3 py-1 rounded-md text-[12px] font-semibold transition-all ${mailClient === id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>{label}</button>
+              ))}
+            </div>
+            <div className="text-[11px] text-gray-400 mb-4">Gmail and Outlook open a compose window in your browser — pick one of these if clicking &ldquo;Email&rdquo; does nothing on your computer. &ldquo;Mail app&rdquo; uses your computer&apos;s default mail program.</div>
+            <div className="text-[12px] font-semibold text-gray-600 mb-1.5">Email footer <span className="text-gray-400 font-normal">— added to the bottom of every email</span></div>
+            <textarea value={emailFooter} onChange={(e) => saveEmailFooter(e.target.value)} className={`w-full ${inputCls} p-2.5 text-xs h-24 resize-none`} />
+            <div className="text-[11px] text-gray-400 mt-1.5 leading-relaxed">US anti-spam law (CAN-SPAM) requires an opt-out and your physical mailing address in marketing emails. Replace the [brackets] with your details. <button onClick={() => saveEmailFooter(DEFAULT_FOOTER)} className="text-emerald-600 font-semibold hover:underline">Reset to default</button></div>
           </div>
           <div className={`${cardCls} p-4`}>
             <div className="text-sm font-bold text-gray-900 mb-1">Daily goal</div>
@@ -962,7 +993,7 @@ export default function CampaignWorkspace() {
               <div className="flex items-center gap-2 flex-wrap">
                 <button onClick={() => quickSend(selectedLead)} className="text-[11px] font-bold text-[#04231a] bg-[#48f4ad] rounded-lg px-2.5 py-1.5 hover:brightness-105 inline-flex items-center gap-1.5"><Icon name="send" className="w-3 h-3" /> Ready to send</button>
                 <button onClick={() => { copy(renderFor(inviteNode.linkedin, selectedLead)); window.open(linkedInHref(selectedLead), '_blank', 'noopener'); }} className="text-[11px] font-semibold border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-lg px-2.5 py-1.5 hover:bg-emerald-100 inline-flex items-center gap-1.5"><Icon name="linkedin" className="w-3 h-3" /> Copy note &amp; open LinkedIn</button>
-                {selectedLead.verified_email && <a href={mailtoFor(selectedLead, emailNode)} className="text-[11px] font-semibold border border-gray-200 text-gray-600 rounded-lg px-2.5 py-1.5 hover:bg-gray-50 inline-flex items-center gap-1.5"><Icon name="mail" className="w-3 h-3" /> Email draft</a>}
+                {selectedLead.verified_email && <a href={emailUrl(selectedLead, emailNode)} target="_blank" rel="noreferrer" className="text-[11px] font-semibold border border-gray-200 text-gray-600 rounded-lg px-2.5 py-1.5 hover:bg-gray-50 inline-flex items-center gap-1.5"><Icon name="mail" className="w-3 h-3" /> Email draft</a>}
                 <button onClick={() => sendInmail(selectedLead)} title="Copy your InMail message and open their profile (Sales Navigator — works even if you're not connected)" className="text-[11px] font-semibold border border-sky-200 bg-sky-50 text-sky-700 rounded-lg px-2.5 py-1.5 hover:bg-sky-100 inline-flex items-center gap-1.5"><Icon name="send" className="w-3 h-3" /> Copy InMail</button>
               </div>
 
