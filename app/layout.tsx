@@ -1,8 +1,8 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'Origami UI Pipeline',
-  description: 'Lead generation and scraping dashboard',
+  title: 'Pivot Leads',
+  description: 'Find, verify & reach decision-makers — compliant sourcing, real email verification, and AI outreach.',
 };
 
 export default function RootLayout({
