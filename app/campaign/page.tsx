@@ -74,8 +74,8 @@ function Highlight({ text }: { text: string }) {
 
 // LinkedIn + Email dual sequence. Each node carries BOTH a LinkedIn body and an
 // Email body; the `channel` toggle picks which one is the active draft.
-type Channel = 'linkedin' | 'email';
-interface SeqNode { key: string; title: string; channel: Channel; linkedin: string; email: string; subject: string }
+type Channel = 'linkedin' | 'email' | 'inmail';
+interface SeqNode { key: string; title: string; channel: Channel; linkedin: string; email: string; inmail: string; subject: string }
 const DEFAULT_SEQUENCE: SeqNode[] = [
   {
     key: 'invite',
@@ -83,6 +83,7 @@ const DEFAULT_SEQUENCE: SeqNode[] = [
     channel: 'linkedin',
     linkedin: "Hi {first_name}, I follow {company}'s work and love what your team is building. I work on experiential brand-activation tech and would love to connect.",
     email: "Hi {first_name},\n\nI came across your work as {title} at {company} — we build a photo/AR capture experience that makes live activations more interactive and shareable. Worth a quick 15-min chat?\n\nBest",
+    inmail: '',
     subject: 'Quick idea for {company}',
   },
   {
@@ -91,7 +92,17 @@ const DEFAULT_SEQUENCE: SeqNode[] = [
     channel: 'email',
     linkedin: "Thanks for connecting, {first_name}! Since you lead experiential at {company}, I thought I'd share what we do — a branded photo/AR capture moment for live events. Open to a quick look?",
     email: "Hi {first_name},\n\nFollowing up — we help teams like {company} turn live moments into shareable, on-brand content on the show floor. Could I send a 2-minute example tailored to your activations?\n\nBest",
+    inmail: '',
     subject: '{first_name} — a thought on {company} activations',
+  },
+  {
+    key: 'inmail',
+    title: 'InMail',
+    channel: 'inmail',
+    linkedin: '',
+    email: '',
+    inmail: "Hi {first_name} — I lead partnerships for a photo/AR experience that makes live activations more interactive and shareable. Given your work as {title} at {company}, I thought it might be a fit. Open to a quick 15-minute look?",
+    subject: 'A quick idea for {company}',
   },
 ];
 
@@ -195,7 +206,16 @@ export default function CampaignWorkspace() {
   useEffect(() => {
     try { const raw = localStorage.getItem(META_KEY); if (raw) setMeta(JSON.parse(raw)); } catch { /* ignore */ }
     try { const p = localStorage.getItem('pivotleads_pitch_v1'); if (p) setSenderPitch(p); } catch { /* ignore */ }
-    try { const s = localStorage.getItem('pivotleads_sequence_v1'); if (s) setSequence(JSON.parse(s)); } catch { /* ignore */ }
+    try {
+      const s = localStorage.getItem('pivotleads_sequence_v1');
+      if (s) {
+        const parsed = JSON.parse(s) as SeqNode[];
+        // Backfill the InMail node + field for sequences saved before InMail existed.
+        const withInmail = parsed.map((n) => ({ ...n, inmail: n.inmail ?? '' }));
+        if (!withInmail.some((n) => n.channel === 'inmail')) withInmail.push(DEFAULT_SEQUENCE[2]);
+        setSequence(withInmail);
+      }
+    } catch { /* ignore */ }
     try { const s = localStorage.getItem('pivotleads_sent_v1'); if (s) { const o = JSON.parse(s); const today = new Date().toISOString().slice(0, 10); setSentToday(o.date === today ? o.count : 0); } } catch { /* ignore */ }
     try { const t = localStorage.getItem('pivotleads_target_v1'); if (t) setDailyTarget(Math.max(1, Math.min(200, Number(t) || 25))); } catch { /* ignore */ }
   }, []);
@@ -245,6 +265,7 @@ export default function CampaignWorkspace() {
   };
   const inviteNode = sequence[0];
   const emailNode = sequence.find((n) => n.channel === 'email') || sequence[0];
+  const inmailNode = sequence.find((n) => n.channel === 'inmail') || DEFAULT_SEQUENCE[2];
   const mailtoFor = (l: Lead, node: SeqNode) => {
     const subject = renderFor(node.subject || 'Quick idea for {company}', l);
     const body = renderFor(node.email, l);
@@ -263,6 +284,15 @@ export default function CampaignWorkspace() {
       flash(`Copied LinkedIn invite for ${first} + opened LinkedIn. Marked Contacted.`);
     }
     setStage(l.id, 'Contacted');
+  };
+
+  // Sales Navigator InMail — copy the InMail message, open their profile so you can
+  // paste it into the InMail composer (works without being connected). Manual send.
+  const sendInmail = (l: Lead) => {
+    copy(renderFor(inmailNode.inmail, l));
+    window.open(linkedInHref(l), '_blank', 'noopener');
+    setStage(l.id, 'Contacted');
+    flash(`Copied InMail for ${(l.person_name || '').split(' ')[0] || 'lead'} + opened their profile. Paste it into the InMail box. Marked Contacted.`);
   };
 
   const toggleSelect = (id: string) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -707,28 +737,28 @@ export default function CampaignWorkspace() {
           <div className="flex items-start justify-between gap-3 flex-wrap mb-5">
             <div>
               <div className="text-sm font-bold text-gray-900">Your messages</div>
-              <div className="text-[12px] text-gray-500 mt-0.5">The two messages you send each person: a LinkedIn note and an intro email. Green words like <span className="text-emerald-600 font-semibold">first name</span> and <span className="text-emerald-600 font-semibold">company</span> fill in automatically for each lead. Preview shows {sampleLead ? sampleLead.person_name : 'a sample lead'}.</div>
+              <div className="text-[12px] text-gray-500 mt-0.5">Your outreach messages: a LinkedIn note, an intro email, and a Sales Navigator InMail for people you&apos;re not connected to. Green words like <span className="text-emerald-600 font-semibold">first name</span> and <span className="text-emerald-600 font-semibold">company</span> fill in automatically for each lead. Preview shows {sampleLead ? sampleLead.person_name : 'a sample lead'}.</div>
             </div>
             <button onClick={() => saveSequence(DEFAULT_SEQUENCE)} className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Reset to default</button>
           </div>
 
           <div className="max-w-3xl mx-auto">
             {sequence.map((node, i) => {
-              const kind: Channel = i === 0 ? 'linkedin' : 'email';
-              const label = kind === 'linkedin' ? 'LinkedIn connection note' : 'Intro email';
-              const bodyVal = kind === 'linkedin' ? node.linkedin : node.email;
-              const setBody = (v: string) => updateNode(i, kind === 'linkedin' ? { linkedin: v } : { email: v });
+              const kind: Channel = i === 0 ? 'linkedin' : i === 1 ? 'email' : 'inmail';
+              const label = kind === 'linkedin' ? 'LinkedIn connection note' : kind === 'email' ? 'Intro email' : 'InMail — for people you’re not connected to';
+              const bodyVal = kind === 'linkedin' ? node.linkedin : kind === 'email' ? node.email : node.inmail;
+              const setBody = (v: string) => updateNode(i, kind === 'linkedin' ? { linkedin: v } : kind === 'email' ? { email: v } : { inmail: v });
               const chips: [string, string][] = [['{first_name}', 'First name'], ['{company}', 'Company'], ['{title}', 'Title']];
               return (
                 <div key={node.key}>
                   <div className={`${cardCls} overflow-hidden`}>
                     <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50">
-                      <span className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-black bg-[#48f4ad] text-[#04231a]"><Icon name={kind === 'linkedin' ? 'linkedin' : 'mail'} className="w-3.5 h-3.5" /></span>
+                      <span className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-black bg-[#48f4ad] text-[#04231a]"><Icon name={kind === 'linkedin' ? 'linkedin' : kind === 'email' ? 'mail' : 'send'} className="w-3.5 h-3.5" /></span>
                       <div className="text-sm font-bold text-gray-900">{label}</div>
                     </div>
                     <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
                       <div>
-                        {kind === 'email' && (
+                        {kind !== 'linkedin' && (
                           <div className="mb-2">
                             <div className="text-[11px] font-semibold text-gray-500 mb-1">Subject line</div>
                             <input value={node.subject} onChange={(e) => updateNode(i, { subject: e.target.value })} className={`w-full ${inputCls} px-2.5 py-1.5 text-xs`} />
@@ -748,24 +778,31 @@ export default function CampaignWorkspace() {
                           <span className="text-[11px] font-semibold text-gray-500">Preview</span>
                           <button onClick={() => copy(renderFor(bodyVal, sampleLead))} className="text-[11px] font-semibold text-emerald-600 hover:underline">Copy</button>
                         </div>
-                        {kind === 'email' && <div className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 mb-2"><span className="text-gray-400">Subject: </span><Highlight text={node.subject} /></div>}
+                        {kind !== 'linkedin' && <div className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 mb-2"><span className="text-gray-400">Subject: </span><Highlight text={node.subject} /></div>}
                         <div className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-2.5 whitespace-pre-wrap min-h-[9rem] leading-relaxed">
                           <Highlight text={bodyVal} />
                         </div>
                       </div>
                     </div>
                   </div>
-                  {i < sequence.length - 1 && (
+                  {i === 0 && (
                     <div className="flex flex-col items-center py-1">
                       <div className="w-px h-4 bg-emerald-200" />
                       <span className="w-6 h-6 rounded-full flex items-center justify-center bg-emerald-50 border border-emerald-200 text-emerald-600"><Icon name="down" className="w-3.5 h-3.5" /></span>
                       <div className="w-px h-4 bg-emerald-200" />
                     </div>
                   )}
+                  {i === 1 && (
+                    <div className="flex items-center gap-3 py-4">
+                      <div className="h-px flex-1 bg-gray-200" />
+                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Or, if you&apos;re not connected — Sales Navigator InMail</span>
+                      <div className="h-px flex-1 bg-gray-200" />
+                    </div>
+                  )}
                 </div>
               );
             })}
-            <div className="text-[11px] text-gray-400 mt-4 text-center">These are used when you hit &ldquo;Ready to send&rdquo; and in the Fast queue — the note is copied for LinkedIn, the email opens a draft.</div>
+            <div className="text-[11px] text-gray-400 mt-4 text-center">The LinkedIn note and email are used by &ldquo;Ready to send&rdquo; and the Fast queue. Use the InMail from a lead&apos;s details panel when you&apos;re not connected.</div>
           </div>
         </div>
       )}
@@ -837,7 +874,7 @@ export default function CampaignWorkspace() {
               <span className="text-[12px] text-gray-500">People per day:</span>
               <input type="number" min={1} max={200} value={dailyTarget} onChange={(e) => saveDailyTarget(Number(e.target.value))} className={`w-16 ${inputCls} px-2 py-1 text-sm`} />
             </div>
-            <div className="text-[12px] text-gray-500 leading-relaxed">Just a reminder to pace yourself — nothing stops you at this number. If you&apos;re sending <span className="font-semibold text-gray-700">LinkedIn invites</span>, keep it near 20/day (~100/week) so LinkedIn doesn&apos;t flag your account. <span className="font-semibold text-gray-700">Email</span> can safely go higher.</div>
+            <div className="text-[12px] text-gray-500 leading-relaxed">Just a reminder to pace yourself — nothing stops you at this number. If you&apos;re sending <span className="font-semibold text-gray-700">LinkedIn invites</span>, keep it near 20/day (~100/week) so LinkedIn doesn&apos;t flag your account. <span className="font-semibold text-gray-700">Email</span> and <span className="font-semibold text-gray-700">Sales Navigator InMail</span> can safely go higher — InMail also lets you message people you&apos;re not connected to, using a separate monthly credit pool.</div>
           </div>
           <div className={`${cardCls} p-4`}>
             <div className="text-sm font-bold text-gray-900 mb-2">Your data</div>
@@ -908,6 +945,7 @@ export default function CampaignWorkspace() {
                 <button onClick={() => quickSend(selectedLead)} className="text-[11px] font-bold text-[#04231a] bg-[#48f4ad] rounded-lg px-2.5 py-1.5 hover:brightness-105 inline-flex items-center gap-1.5"><Icon name="send" className="w-3 h-3" /> Ready to send</button>
                 <button onClick={() => { copy(renderFor(inviteNode.linkedin, selectedLead)); window.open(linkedInHref(selectedLead), '_blank', 'noopener'); }} className="text-[11px] font-semibold border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-lg px-2.5 py-1.5 hover:bg-emerald-100 inline-flex items-center gap-1.5"><Icon name="linkedin" className="w-3 h-3" /> Copy note &amp; open LinkedIn</button>
                 {selectedLead.verified_email && <a href={mailtoFor(selectedLead, emailNode)} className="text-[11px] font-semibold border border-gray-200 text-gray-600 rounded-lg px-2.5 py-1.5 hover:bg-gray-50 inline-flex items-center gap-1.5"><Icon name="mail" className="w-3 h-3" /> Email draft</a>}
+                <button onClick={() => sendInmail(selectedLead)} title="Copy your InMail message and open their profile (Sales Navigator — works even if you're not connected)" className="text-[11px] font-semibold border border-sky-200 bg-sky-50 text-sky-700 rounded-lg px-2.5 py-1.5 hover:bg-sky-100 inline-flex items-center gap-1.5"><Icon name="send" className="w-3 h-3" /> Copy InMail</button>
               </div>
 
               {/* AI Outreach Composer */}
