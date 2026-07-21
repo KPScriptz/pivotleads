@@ -321,6 +321,20 @@ export default function CampaignWorkspace() {
     setStage(l.id, 'Contacted');
   };
 
+  // Row-level 1-click copy: grab the personalized text, mark Contacted, sync the team.
+  const quickCopyNote = (l: Lead) => {
+    copy(renderFor(inviteNode.linkedin, l));
+    setStage(l.id, 'Contacted');
+    flash(`Copied LinkedIn note for ${(l.person_name || '').split(' ')[0] || 'lead'} — marked Contacted.`);
+  };
+  const quickCopyEmail = (l: Lead) => {
+    if (!l.verified_email) return;
+    const subject = renderFor(emailNode.subject || 'Quick idea for {company}', l);
+    copy(`Subject: ${subject}\n\n${renderFor(emailNode.email, l)}`);
+    setStage(l.id, 'Contacted');
+    flash(`Copied email for ${(l.person_name || '').split(' ')[0] || 'lead'} — marked Contacted.`);
+  };
+
   // Sales Navigator InMail — copy the InMail message, open their profile so you can
   // paste it into the InMail composer (works without being connected). Manual send.
   const sendInmail = (l: Lead) => {
@@ -744,9 +758,10 @@ export default function CampaignWorkspace() {
                               <span className="text-emerald-600">✓</span> {getStage(lead.id) === 'Contacted' ? 'Contacted' : getStage(lead.id)}
                             </span>
                           ) : (
-                            <button onClick={() => quickSend(lead)} title="Copy LinkedIn invite + open email draft, then mark Contacted" className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors">
-                              <Icon name="send" className="w-3 h-3" /> Ready to send
-                            </button>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <button onClick={() => quickCopyNote(lead)} title="Copy the personalized LinkedIn note and mark Contacted" className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors"><Icon name="linkedin" className="w-3 h-3" /> Copy note</button>
+                              {lead.verified_email && <button onClick={() => quickCopyEmail(lead)} title="Copy the personalized email opener and mark Contacted" className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1.5 rounded-lg bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 transition-colors"><Icon name="mail" className="w-3 h-3" /> Copy email</button>}
+                            </div>
                           )}
                         </td>
                         <td className="px-4 py-3.5 hidden md:table-cell">
