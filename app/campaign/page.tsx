@@ -176,6 +176,7 @@ export default function CampaignWorkspace() {
   const [outreach, setOutreach] = useState<{ note: string; email: string } | null>(null);
   const [composing, setComposing] = useState(false);
   const [sentToday, setSentToday] = useState(0);
+  const [dailyTarget, setDailyTarget] = useState(25);
   const [toast, setToast] = useState('');
 
   // AI command bar
@@ -196,6 +197,7 @@ export default function CampaignWorkspace() {
     try { const p = localStorage.getItem('pivotleads_pitch_v1'); if (p) setSenderPitch(p); } catch { /* ignore */ }
     try { const s = localStorage.getItem('pivotleads_sequence_v1'); if (s) setSequence(JSON.parse(s)); } catch { /* ignore */ }
     try { const s = localStorage.getItem('pivotleads_sent_v1'); if (s) { const o = JSON.parse(s); const today = new Date().toISOString().slice(0, 10); setSentToday(o.date === today ? o.count : 0); } } catch { /* ignore */ }
+    try { const t = localStorage.getItem('pivotleads_target_v1'); if (t) setDailyTarget(Math.max(1, Math.min(200, Number(t) || 25))); } catch { /* ignore */ }
   }, []);
 
   const flash = (text: string) => { setToast(text); window.setTimeout(() => setToast((t) => (t === text ? '' : t)), 3200); };
@@ -224,6 +226,7 @@ export default function CampaignWorkspace() {
 
   const copy = (text: string) => { try { navigator.clipboard.writeText(text); } catch { /* ignore */ } };
   const savePitch = (p: string) => { setSenderPitch(p); try { localStorage.setItem('pivotleads_pitch_v1', p); } catch { /* ignore */ } };
+  const saveDailyTarget = (n: number) => { const v = Math.max(1, Math.min(200, Math.round(n) || 25)); setDailyTarget(v); try { localStorage.setItem('pivotleads_target_v1', String(v)); } catch { /* ignore */ } };
   const saveSequence = (s: SeqNode[]) => { setSequence(s); try { localStorage.setItem('pivotleads_sequence_v1', JSON.stringify(s)); } catch { /* ignore */ } };
   const updateNode = (i: number, patch: Partial<SeqNode>) => saveSequence(sequence.map((n, j) => (j === i ? { ...n, ...patch } : n)));
 
@@ -828,9 +831,13 @@ export default function CampaignWorkspace() {
             <textarea value={senderPitch} onChange={(e) => savePitch(e.target.value)} placeholder="e.g. We build a photo/AR experience that makes live events more interactive and shareable." className={`w-full ${inputCls} p-2.5 text-sm h-20 resize-none`} />
           </div>
           <div className={`${cardCls} p-4`}>
-            <div className="text-sm font-bold text-gray-900 mb-1">Today&apos;s pace</div>
-            <div className="text-[13px] text-gray-800 font-semibold"><span className={sentToday >= 20 ? 'text-rose-600' : 'text-emerald-600'}>{sentToday}</span> / about 20 sent today</div>
-            <div className="text-[12px] text-gray-500 mt-1 leading-relaxed">Try to stay under ~20 a day (and ~100 LinkedIn invites a week) so your account stays healthy. You send everything by hand — nothing is automated.</div>
+            <div className="text-sm font-bold text-gray-900 mb-1">Daily goal</div>
+            <div className="text-[13px] text-gray-800 font-semibold mb-2"><span className={sentToday >= dailyTarget ? 'text-rose-600' : 'text-emerald-600'}>{sentToday}</span> of {dailyTarget} sent today</div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[12px] text-gray-500">People per day:</span>
+              <input type="number" min={1} max={200} value={dailyTarget} onChange={(e) => saveDailyTarget(Number(e.target.value))} className={`w-16 ${inputCls} px-2 py-1 text-sm`} />
+            </div>
+            <div className="text-[12px] text-gray-500 leading-relaxed">Just a reminder to pace yourself — nothing stops you at this number. If you&apos;re sending <span className="font-semibold text-gray-700">LinkedIn invites</span>, keep it near 20/day (~100/week) so LinkedIn doesn&apos;t flag your account. <span className="font-semibold text-gray-700">Email</span> can safely go higher.</div>
           </div>
           <div className={`${cardCls} p-4`}>
             <div className="text-sm font-bold text-gray-900 mb-2">Your data</div>
@@ -972,7 +979,7 @@ export default function CampaignWorkspace() {
                 <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-200">
                   <div className="text-sm font-bold text-gray-900">Fast queue {cur && <span className="text-gray-400 font-normal">— {focusIdx + 1} / {focusQueue.length}</span>}</div>
                   <div className="flex items-center gap-3">
-                    <span className={`text-[11px] ${sentToday >= 20 ? 'text-rose-600 font-semibold' : 'text-gray-400'}`}>{sentToday}/~20 today</span>
+                    <span className={`text-[11px] ${sentToday >= dailyTarget ? 'text-rose-600 font-semibold' : 'text-gray-400'}`}>{sentToday}/{dailyTarget} today</span>
                     <button onClick={() => setFocusOpen(false)} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
                   </div>
                 </div>
