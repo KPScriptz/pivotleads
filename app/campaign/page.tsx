@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Search, Mail, Sparkles, Play, ExternalLink, Copy, ShieldCheck, AlertTriangle, Circle, ArrowDown, Send, Download } from 'lucide-react';
 
@@ -35,7 +35,10 @@ interface Lead {
   tags?: string[];
   note?: string;
   rejected?: boolean;
+  contacted_by?: string | null;
 }
+
+interface LeadNote { id: string; lead_id: string; author_email: string; author_name: string; body: string; created_at: string }
 
 // Email deliverability label derived from the MX check stored in email_confidence.
 // Light-mode: soft, low-saturation pills.
@@ -161,6 +164,15 @@ export default function CampaignWorkspace() {
   const [leads, setLeads] = useState<Lead[]>(INITIAL_DEMO_LEADS);
   const [activeTab, setActiveTab] = useState<Tab>('Overview');
 
+  // Individual sign-in (Supabase Auth). Each teammate has their own account;
+  // their name drives "Contacted by" attribution and note authorship.
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authUser, setAuthUser] = useState<{ email: string; name: string } | null>(null);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPw, setAuthPw] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authErr, setAuthErr] = useState('');
+
   // Sourcing config
   const [provider, setProvider] = useState<'serper' | 'apollo'>('serper');
   const [targetLinksText, setTargetLinksText] = useState('');
@@ -174,7 +186,6 @@ export default function CampaignWorkspace() {
   // the database so the whole team shares it. Reads come from the `leads` state
   // (fetched from the DB); writes go through the edge function's service role.
   type LeadMeta = { tags: string[]; note: string; rejected: boolean; stage: string };
-  const noteTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   // People view
   const [search, setSearch] = useState('');
@@ -183,6 +194,9 @@ export default function CampaignWorkspace() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [tagInput, setTagInput] = useState('');
+  // Shared team notes for the open lead (everyone sees everyone's notes).
+  const [leadNotes, setLeadNotes] = useState<LeadNote[]>([]);
+  const [noteInput, setNoteInput] = useState('');
 
   // Template sequence
   const [sequence, setSequence] = useState<SeqNode[]>(DEFAULT_SEQUENCE);
@@ -237,24 +251,21 @@ export default function CampaignWorkspace() {
     return { tags: l?.tags ?? [], note: l?.note ?? '', rejected: l?.rejected ?? false, stage: l?.stage ?? 'New' };
   };
   // Optimistic local update (instant UI) — used by both the DB writer and note debounce.
-  const patchLeadLocal = (id: string, patch: Partial<LeadMeta>) =>
+  const patchLeadLocal = (id: string, patch: Partial<Lead>) =>
     setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
   // Persist a patch to the shared database (fire-and-forget; UI already updated).
-  const persistMeta = (id: string, patch: Partial<LeadMeta>) => {
+  const persistMeta = async (id: string, patch: Partial<LeadMeta>) => {
     if (!SUPABASE_ANON_KEY) return;
-    fetch(`${SUPABASE_URL}/functions/v1/pivotleads`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SUPABASE_ANON_KEY}`, apikey: SUPABASE_ANON_KEY },
-      body: JSON.stringify({ action: 'update_meta', lead_id: id, patch }),
-    }).then((r) => { if (!r.ok) console.warn('Progress save failed for', id); }).catch(() => { /* offline; local copy stands */ });
+    try {
+      const r = await fetch(`${SUPABASE_URL}/functions/v1/pivotleads`, {
+        method: 'POST',
+        headers: await authHeaders(),
+        body: JSON.stringify({ action: 'update_meta', lead_id: id, patch }),
+      });
+      if (!r.ok) console.warn('Progress save failed for', id);
+    } catch { /* offline; local copy stands */ }
   };
   const updateMeta = (id: string, patch: Partial<LeadMeta>) => { patchLeadLocal(id, patch); persistMeta(id, patch); };
-  // Notes save on a short debounce so typing doesn't hammer the database.
-  const updateNote = (id: string, note: string) => {
-    patchLeadLocal(id, { note });
-    clearTimeout(noteTimers.current[id]);
-    noteTimers.current[id] = setTimeout(() => persistMeta(id, { note }), 700);
-  };
   const getStage = (id: string) => getMeta(id).stage || 'New';
   const bumpSent = () => {
     const today = new Date().toISOString().slice(0, 10);
@@ -264,7 +275,12 @@ export default function CampaignWorkspace() {
     try { localStorage.setItem('pivotleads_sent_v1', JSON.stringify({ date: today, count })); } catch { /* ignore */ }
     setSentToday(count);
   };
-  const setStage = (id: string, stage: string) => { if (stage === 'Contacted' && getStage(id) !== 'Contacted') bumpSent(); updateMeta(id, { stage }); };
+  const setStage = (id: string, stage: string) => {
+    if (stage === 'Contacted' && getStage(id) !== 'Contacted') bumpSent();
+    // Optimistic attribution locally; the server stamps the authoritative value.
+    patchLeadLocal(id, { stage, contacted_by: stage === 'New' ? null : (authUser?.name || null) });
+    persistMeta(id, { stage });
+  };
   const addTag = (id: string, tag: string) => { const t = tag.trim(); if (!t) return; const cur = getMeta(id); if (!cur.tags.includes(t)) updateMeta(id, { tags: [...cur.tags, t] }); };
   const removeTag = (id: string, tag: string) => updateMeta(id, { tags: getMeta(id).tags.filter((x) => x !== tag) });
 
@@ -397,7 +413,38 @@ export default function CampaignWorkspace() {
       console.warn('Database fetch bypassed.', err);
     }
   };
-  useEffect(() => { fetchLiveLeads(); }, []);
+
+  // Session bootstrap + keep authUser in sync with Supabase Auth.
+  useEffect(() => {
+    const supabase = getSupabase();
+    if (!supabase) { setAuthChecked(true); return; }
+    const toUser = (u: { email?: string; user_metadata?: Record<string, unknown> } | null | undefined) =>
+      u?.email ? { email: u.email, name: String(u.user_metadata?.name || u.email.split('@')[0]) } : null;
+    supabase.auth.getSession().then(({ data }) => { setAuthUser(toUser(data.session?.user)); setAuthChecked(true); });
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => setAuthUser(toUser(session?.user)));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // Load the shared list once someone is signed in (reads are RLS-gated to the team).
+  useEffect(() => { if (authUser) fetchLiveLeads(); }, [authUser]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const signIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const supabase = getSupabase();
+    if (!supabase || !authEmail || !authPw || authBusy) return;
+    setAuthBusy(true); setAuthErr('');
+    const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim().toLowerCase(), password: authPw });
+    if (error) { setAuthErr('Wrong email or password. Try again.'); setAuthBusy(false); return; }
+    setAuthPw(''); setAuthBusy(false);
+  };
+  const signOut = async () => { await getSupabase()?.auth.signOut(); setLeads(INITIAL_DEMO_LEADS); };
+
+  // Edge-function calls carry the signed-in user's token (the anon key alone is rejected).
+  const authHeaders = async (): Promise<Record<string, string>> => {
+    const supabase = getSupabase();
+    const token = (await supabase?.auth.getSession())?.data.session?.access_token || SUPABASE_ANON_KEY;
+    return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY };
+  };
 
   const handleRun = async (mode: 'target' | 'discover' = 'target', src: 'serper' | 'apollo' = provider) => {
     if (!SUPABASE_ANON_KEY) { setRunMsg({ type: 'err', text: 'Lead finding isn’t connected yet. Add your Supabase key and try again.' }); return; }
@@ -408,7 +455,7 @@ export default function CampaignWorkspace() {
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/pivotleads`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SUPABASE_ANON_KEY}`, apikey: SUPABASE_ANON_KEY },
+        headers: await authHeaders(),
         body: JSON.stringify({ targetLinks: urls, icpRules, provider: src, mode, enrichCap: src === 'apollo' ? apolloCap : undefined }),
       });
       const data = await res.json().catch(() => null);
@@ -430,7 +477,7 @@ export default function CampaignWorkspace() {
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/pivotleads`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SUPABASE_ANON_KEY}`, apikey: SUPABASE_ANON_KEY },
+        headers: await authHeaders(),
         body: JSON.stringify({ action: 'compose', lead: selectedLead, senderContext: senderPitch || undefined }),
       });
       const data = await res.json().catch(() => null);
@@ -443,6 +490,31 @@ export default function CampaignWorkspace() {
     }
   };
   useEffect(() => { setOutreach(null); }, [selectedLead?.id]);
+
+  // Load the shared notes thread whenever a lead's panel opens.
+  useEffect(() => {
+    setLeadNotes([]); setNoteInput('');
+    const supabase = getSupabase();
+    const id = selectedLead?.id;
+    if (!supabase || !id) return;
+    supabase.from('lead_notes').select('*').eq('lead_id', id).order('created_at', { ascending: true })
+      .then(({ data }) => { setLeadNotes((data as unknown as LeadNote[]) || []); });
+  }, [selectedLead?.id]);
+
+  const addNote = async () => {
+    const supabase = getSupabase();
+    const body = noteInput.trim();
+    if (!supabase || !selectedLead || !authUser || !body) return;
+    setNoteInput('');
+    const payload = { lead_id: selectedLead.id, author_email: authUser.email, author_name: authUser.name, body };
+    const { data, error } = await supabase
+      .from('lead_notes')
+      .insert(payload as never)
+      .select()
+      .single();
+    if (!error && data) setLeadNotes((prev) => [...prev, data as unknown as LeadNote]);
+    else flash('Couldn’t save that note — try again.');
+  };
 
   /* ---------------------------------------------------------------------- */
   /*  Fast queue (focus mode)                                                */
@@ -523,7 +595,7 @@ export default function CampaignWorkspace() {
       };
       const res = await fetch(`${SUPABASE_URL}/functions/v1/pivotleads`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SUPABASE_ANON_KEY}`, apikey: SUPABASE_ANON_KEY },
+        headers: await authHeaders(),
         body: JSON.stringify({ action: 'assist', prompt: t, senderContext: senderPitch || undefined, context }),
       });
       const data = await res.json().catch(() => null);
@@ -543,6 +615,37 @@ export default function CampaignWorkspace() {
   const cardCls = 'bg-white border border-gray-200 rounded-xl shadow-sm';
   const inputCls = 'bg-gray-50 border border-gray-200 rounded-lg text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100';
 
+  if (!authChecked) {
+    return <div className="min-h-screen bg-[#F4F5F7] flex items-center justify-center text-sm text-gray-400 font-sans">Loading…</div>;
+  }
+  if (!authUser) {
+    return (
+      <div className="min-h-screen bg-[#F4F5F7] flex items-center justify-center px-4 font-sans">
+        <div className="w-full max-w-sm">
+          <div className="text-center mb-6">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-emerald-600 font-bold">Campaign</div>
+            <div className="text-2xl font-bold tracking-tight text-gray-900 mt-1">Pivot <span className="text-emerald-600">Leads</span></div>
+          </div>
+          <form onSubmit={signIn} className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 space-y-3">
+            <div>
+              <label className="block text-sm font-semibold text-gray-800 mb-1.5">Email</label>
+              <input type="email" value={authEmail} autoFocus autoComplete="email" onChange={(e) => { setAuthEmail(e.target.value); setAuthErr(''); }} placeholder="you@company.com" className={`w-full ${inputCls} px-3 py-2.5 text-sm`} />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-800 mb-1.5">Password</label>
+              <input type="password" value={authPw} autoComplete="current-password" onChange={(e) => { setAuthPw(e.target.value); setAuthErr(''); }} placeholder="Your password" className={`w-full ${inputCls} px-3 py-2.5 text-sm`} />
+            </div>
+            {authErr && <div className="text-[13px] text-rose-600">{authErr}</div>}
+            <button type="submit" disabled={authBusy || !authEmail || !authPw} className="w-full bg-[#48f4ad] hover:brightness-105 disabled:opacity-50 text-[#04231a] text-sm font-bold py-2.5 rounded-lg transition-all">
+              {authBusy ? 'Signing in…' : 'Sign in'}
+            </button>
+          </form>
+          <div className="text-center text-[11px] text-gray-400 mt-4">Private team workspace — accounts are created by your admin.</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen font-sans text-gray-900 antialiased bg-[#F4F5F7] pb-28">
       {/* Campaign header */}
@@ -557,9 +660,16 @@ export default function CampaignWorkspace() {
             </h1>
             <p className="text-[13px] text-gray-500 mt-2 max-w-xl leading-relaxed">Find the right people, then reach out with a personal note and email — all sent by you, in a few clicks.</p>
           </div>
-          <button onClick={exportCsv} className="mt-1 bg-gray-900 hover:bg-black text-white text-xs font-semibold py-2 px-3.5 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm">
-            <Icon name="download" /> Export CSV
-          </button>
+          <div className="mt-1 flex items-center gap-2 flex-wrap justify-end">
+            <span className="inline-flex items-center gap-2 text-[11px] font-semibold text-gray-600 bg-white border border-gray-200 rounded-full pl-1.5 pr-3 py-1">
+              <span className="w-6 h-6 rounded-full bg-[#48f4ad] text-[#04231a] font-bold text-[11px] grid place-items-center uppercase">{authUser?.name?.charAt(0) || '?'}</span>
+              {authUser?.name}
+              <button onClick={signOut} className="text-gray-400 hover:text-gray-700 font-medium">Sign out</button>
+            </span>
+            <button onClick={exportCsv} className="bg-gray-900 hover:bg-black text-white text-xs font-semibold py-2 px-3.5 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm">
+              <Icon name="download" /> Export CSV
+            </button>
+          </div>
         </div>
 
         {/* Five-step stepper — rounded pill tabs */}
@@ -756,6 +866,7 @@ export default function CampaignWorkspace() {
                           {contacted ? (
                             <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-gray-600">
                               <span className="text-emerald-600">✓</span> {getStage(lead.id) === 'Contacted' ? 'Contacted' : getStage(lead.id)}
+                              {lead.contacted_by && <span className="text-gray-400 font-medium">· {lead.contacted_by}</span>}
                             </span>
                           ) : (
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1054,10 +1165,25 @@ export default function CampaignWorkspace() {
                 </div>
               </div>
 
-              {/* Notes */}
+              {/* Team notes thread — everyone's notes, with who wrote them */}
               <div>
-                <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Notes</div>
-                <textarea value={getMeta(selectedLead.id).note} onChange={(e) => updateNote(selectedLead.id, e.target.value)} placeholder="Call notes, context, next steps…" className={`w-full bg-white ${inputCls} p-2.5 text-xs h-24 resize-none`} />
+                <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Team notes</div>
+                <div className="space-y-2 mb-2 max-h-56 overflow-y-auto">
+                  {leadNotes.length === 0 && <div className="text-xs text-gray-400 italic">No notes yet — be the first.</div>}
+                  {leadNotes.map((n) => (
+                    <div key={n.id} className="rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-2">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="text-[11px] font-bold text-emerald-700">{n.author_name}</span>
+                        <span className="text-[10px] text-gray-400">{new Date(n.created_at).toLocaleDateString()} {new Date(n.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+                      </div>
+                      <div className="text-xs text-gray-700 mt-0.5 whitespace-pre-wrap leading-relaxed">{n.body}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-1.5">
+                  <input value={noteInput} onChange={(e) => setNoteInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addNote(); }} placeholder="Add a note for the team…" className={`flex-1 bg-white ${inputCls} px-2.5 py-1.5 text-xs`} />
+                  <button onClick={addNote} disabled={!noteInput.trim()} className="bg-gray-900 hover:bg-black disabled:opacity-40 text-white text-xs font-semibold px-3 rounded-lg">Post</button>
+                </div>
               </div>
 
               <div className="flex gap-2 pt-1">

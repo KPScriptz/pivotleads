@@ -415,6 +415,17 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Invalid JSON body" }, 400);
   }
 
+  // --- Team auth: every action requires a signed-in, approved team member.
+  // The anon key alone is rejected; callers must send their user access token.
+  const callerJwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  const adminClient = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
+  const { data: callerData, error: callerErr } = await adminClient.auth.getUser(callerJwt);
+  const callerEmail = callerData?.user?.email?.toLowerCase() ?? "";
+  if (callerErr || !callerEmail) return json({ error: "Sign in required" }, 401);
+  const { data: member } = await adminClient.from("team_members").select("email,name").eq("email", callerEmail).maybeSingle();
+  if (!member) return json({ error: "This account isn't on the team yet. Ask an admin to add you." }, 403);
+  const callerName = (member as { name?: string }).name || callerEmail;
+
   // --- AI Outreach Composer: draft a personalized message the USER sends manually.
   // Compliant networking aid — it writes copy, it never contacts anyone.
   if (body.action === "compose") {
@@ -542,7 +553,11 @@ Actions: discover = run ICP-based lead discovery; export_csv = download the curr
     const patch = (body.patch ?? {}) as Record<string, unknown>;
     const allowed: Record<string, unknown> = {};
     const STAGES = ["New", "Contacted", "Accepted", "Replied", "Won"];
-    if (typeof patch.stage === "string" && STAGES.includes(patch.stage)) allowed.stage = patch.stage;
+    if (typeof patch.stage === "string" && STAGES.includes(patch.stage)) {
+      allowed.stage = patch.stage;
+      // Attribution: stamp who moved the lead; clearing back to New clears it.
+      allowed.contacted_by = patch.stage === "New" ? null : callerName;
+    }
     if (Array.isArray(patch.tags)) allowed.tags = patch.tags.map((t) => String(t)).slice(0, 40);
     if (typeof patch.note === "string") allowed.note = patch.note.slice(0, 5000);
     if (typeof patch.rejected === "boolean") allowed.rejected = patch.rejected;
