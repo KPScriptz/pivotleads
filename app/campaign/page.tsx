@@ -214,6 +214,10 @@ export default function CampaignWorkspace() {
   const [emailFooter, setEmailFooter] = useState(DEFAULT_FOOTER);
   // Optional sequencer webhook (Zapier / Make / Instantly / Smartlead) — paste once in Settings.
   const [webhookUrl, setWebhookUrl] = useState('');
+  // Let a signed-in teammate set their own password.
+  const [pwNew, setPwNew] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   // AI command bar
   const [cmd, setCmd] = useState('');
@@ -477,6 +481,17 @@ export default function CampaignWorkspace() {
     setAuthPw(''); setAuthBusy(false);
   };
   const signOut = async () => { await getSupabase()?.auth.signOut(); setLeads(INITIAL_DEMO_LEADS); };
+
+  const changePassword = async () => {
+    const supabase = getSupabase();
+    if (!supabase || pwBusy) return;
+    if (pwNew.length < 8) { setPwMsg({ ok: false, text: 'Use at least 8 characters.' }); return; }
+    setPwBusy(true); setPwMsg(null);
+    const { error } = await supabase.auth.updateUser({ password: pwNew });
+    if (error) setPwMsg({ ok: false, text: error.message });
+    else { setPwMsg({ ok: true, text: 'Password updated — you’ll use it next time you sign in.' }); setPwNew(''); }
+    setPwBusy(false);
+  };
 
   // Edge-function calls carry the signed-in user's token (the anon key alone is rejected).
   const authHeaders = async (): Promise<Record<string, string>> => {
@@ -1062,6 +1077,16 @@ export default function CampaignWorkspace() {
       {/* ================= SETTINGS ================= */}
       {activeTab === 'Settings' && (
         <div className="mx-4 sm:mx-8 mt-6 mb-8 grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className={`${cardCls} p-4 lg:col-span-2`}>
+            <div className="text-sm font-bold text-gray-900 mb-1">Your account</div>
+            <div className="text-[12px] text-gray-500 mb-3">Signed in as <span className="font-semibold text-gray-700">{authUser?.name}</span> ({authUser?.email}). Your name is stamped on every lead you contact, note you add, and sequence you push.</div>
+            <div className="text-[12px] font-semibold text-gray-600 mb-1.5">Set your own password</div>
+            <div className="flex gap-2 items-center flex-wrap">
+              <input type="password" value={pwNew} autoComplete="new-password" onChange={(e) => { setPwNew(e.target.value); setPwMsg(null); }} placeholder="New password (8+ characters)" className={`${inputCls} px-3 py-2 text-sm w-full sm:w-64`} />
+              <button onClick={changePassword} disabled={pwBusy || pwNew.length < 8} className="bg-gray-900 hover:bg-black disabled:opacity-40 text-white text-xs font-bold px-4 py-2 rounded-lg">{pwBusy ? 'Saving…' : 'Update password'}</button>
+              {pwMsg && <span className={`text-[12px] font-medium ${pwMsg.ok ? 'text-emerald-600' : 'text-rose-600'}`}>{pwMsg.text}</span>}
+            </div>
+          </div>
           <div className={`${cardCls} p-4 lg:col-span-2`}>
             <div className="text-sm font-bold text-gray-900 mb-1">What you offer</div>
             <div className="text-[12px] text-gray-500 mb-2">One or two sentences about what you do. The AI uses this to write your outreach.</div>
