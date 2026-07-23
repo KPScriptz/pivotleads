@@ -408,7 +408,7 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY (auto-injected by Supabase)." }, 500);
   }
 
-  let body: { targetLinks?: unknown; icpRules?: unknown; provider?: unknown; action?: unknown; lead?: Record<string, unknown>; senderContext?: unknown; mode?: unknown; rows?: unknown; enrichCap?: unknown; apolloFilters?: { sizes?: string[]; industries?: string[] }; prompt?: unknown; context?: unknown; lead_id?: unknown; patch?: unknown };
+  let body: { targetLinks?: unknown; icpRules?: unknown; provider?: unknown; action?: unknown; lead?: Record<string, unknown>; senderContext?: unknown; mode?: unknown; rows?: unknown; enrichCap?: unknown; apolloFilters?: { sizes?: string[]; industries?: string[] }; prompt?: unknown; context?: unknown; lead_id?: unknown; patch?: unknown; webhook_url?: unknown; payload?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -569,6 +569,25 @@ Actions: discover = run ICP-based lead discovery; export_csv = download the curr
       return json({ ok: true });
     } catch (e) {
       return json({ error: `update_meta failed: ${e instanceof Error ? e.message : String(e)}` }, 500);
+    }
+  }
+
+  // --- Sequencer webhook relay: server-side POST so any webhook works (Zapier,
+  // Make, Instantly, Smartlead) with no browser CORS issues. Team-gated above.
+  if (body.action === "push_webhook") {
+    const url = typeof body.webhook_url === "string" ? body.webhook_url.trim() : "";
+    if (!/^https:\/\/[^\s]+$/i.test(url)) return json({ error: "The webhook link must start with https://" }, 400);
+    const payload = (body.payload && typeof body.payload === "object") ? body.payload : {};
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, pushed_by: callerName, pushed_at: new Date().toISOString() }),
+      });
+      if (!r.ok) return json({ error: `The sequencer webhook answered with ${r.status} — check the link.` }, 502);
+      return json({ ok: true });
+    } catch {
+      return json({ error: "Couldn't reach that webhook link — double-check it and try again." }, 502);
     }
   }
 

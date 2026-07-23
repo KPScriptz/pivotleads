@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Search, Mail, Sparkles, Play, ExternalLink, Copy, ShieldCheck, AlertTriangle, Circle, ArrowDown, Send, Download } from 'lucide-react';
+import { Search, Mail, Sparkles, Play, ExternalLink, Copy, ShieldCheck, AlertTriangle, Circle, ArrowDown, Send, Download, Zap } from 'lucide-react';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://jlgvaejxydcteciqzgub.supabase.co';
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -57,7 +57,7 @@ function Icon({ name, className = 'w-3.5 h-3.5' }: { name: string; className?: s
   const map: Record<string, React.ComponentType<{ className?: string }>> = {
     search: Search, mail: Mail, sparkles: Sparkles, play: Play, external: ExternalLink,
     copy: Copy, shield: ShieldCheck, alert: AlertTriangle, dot: Circle,
-    down: ArrowDown, send: Send, download: Download,
+    down: ArrowDown, send: Send, download: Download, zap: Zap,
   };
   const C = map[name] || Circle;
   return <C className={className} />;
@@ -212,6 +212,8 @@ export default function CampaignWorkspace() {
   const [mailClient, setMailClient] = useState<'gmail' | 'outlook' | 'default'>('gmail');
   const DEFAULT_FOOTER = "—\nYou're receiving this because I thought it could be relevant to your work at {company}. If you'd prefer not to hear from me, just reply \"unsubscribe\" and I won't reach out again.\n[Your company] · [Your mailing address]";
   const [emailFooter, setEmailFooter] = useState(DEFAULT_FOOTER);
+  // Optional sequencer webhook (Zapier / Make / Instantly / Smartlead) — paste once in Settings.
+  const [webhookUrl, setWebhookUrl] = useState('');
 
   // AI command bar
   const [cmd, setCmd] = useState('');
@@ -242,6 +244,7 @@ export default function CampaignWorkspace() {
     try { const t = localStorage.getItem('pivotleads_target_v1'); if (t) setDailyTarget(Math.max(1, Math.min(200, Number(t) || 25))); } catch { /* ignore */ }
     try { const m = localStorage.getItem('pivotleads_mailclient_v1'); if (m === 'gmail' || m === 'outlook' || m === 'default') setMailClient(m); } catch { /* ignore */ }
     try { const f = localStorage.getItem('pivotleads_footer_v1'); if (f !== null) setEmailFooter(f); } catch { /* ignore */ }
+    try { const w = localStorage.getItem('pivotleads_webhook_v1'); if (w) setWebhookUrl(w); } catch { /* ignore */ }
   }, []);
 
   const flash = (text: string) => { setToast(text); window.setTimeout(() => setToast((t) => (t === text ? '' : t)), 3200); };
@@ -288,6 +291,7 @@ export default function CampaignWorkspace() {
   const savePitch = (p: string) => { setSenderPitch(p); try { localStorage.setItem('pivotleads_pitch_v1', p); } catch { /* ignore */ } };
   const saveMailClient = (c: 'gmail' | 'outlook' | 'default') => { setMailClient(c); try { localStorage.setItem('pivotleads_mailclient_v1', c); } catch { /* ignore */ } };
   const saveEmailFooter = (f: string) => { setEmailFooter(f); try { localStorage.setItem('pivotleads_footer_v1', f); } catch { /* ignore */ } };
+  const saveWebhookUrl = (w: string) => { setWebhookUrl(w.trim()); try { localStorage.setItem('pivotleads_webhook_v1', w.trim()); } catch { /* ignore */ } };
   const saveDailyTarget = (n: number) => { const v = Math.max(1, Math.min(200, Math.round(n) || 25)); setDailyTarget(v); try { localStorage.setItem('pivotleads_target_v1', String(v)); } catch { /* ignore */ } };
   const saveSequence = (s: SeqNode[]) => { setSequence(s); try { localStorage.setItem('pivotleads_sequence_v1', JSON.stringify(s)); } catch { /* ignore */ } };
   const updateNode = (i: number, patch: Partial<SeqNode>) => saveSequence(sequence.map((n, j) => (j === i ? { ...n, ...patch } : n)));
@@ -349,6 +353,41 @@ export default function CampaignWorkspace() {
     copy(`Subject: ${subject}\n\n${renderFor(emailNode.email, l)}`);
     setStage(l.id, 'Contacted');
     flash(`Copied email for ${(l.person_name || '').split(' ')[0] || 'lead'} — marked Contacted.`);
+  };
+
+  // One-click push into the user's cold-email sequencer via their saved webhook.
+  const pushToSequencer = async (l: Lead) => {
+    if (!webhookUrl || !l.verified_email) return;
+    const first = (l.person_name || '').split(' ')[0] || 'lead';
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/pivotleads`, {
+        method: 'POST',
+        headers: await authHeaders(),
+        body: JSON.stringify({
+          action: 'push_webhook',
+          webhook_url: webhookUrl,
+          payload: {
+            source: 'pivot-leads',
+            person_name: l.person_name,
+            first_name: (l.person_name || '').split(' ')[0] || '',
+            title: l.decision_maker_title,
+            company: l.company_name,
+            email: l.verified_email,
+            linkedin_url: l.linkedin_url || '',
+            fit_score: l.fit_score,
+            icebreaker: renderFor(inviteNode.linkedin, l),
+            email_subject: renderFor(emailNode.subject, l),
+            email_body: renderFor(emailNode.email, l),
+          },
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
+      setStage(l.id, 'Contacted');
+      flash(`${first} sent to your sequencer — marked Contacted.`);
+    } catch (e) {
+      flash(`Couldn’t push ${first}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   // Sales Navigator InMail — copy the InMail message, open their profile so you can
@@ -1042,6 +1081,23 @@ export default function CampaignWorkspace() {
             <textarea value={emailFooter} onChange={(e) => saveEmailFooter(e.target.value)} className={`w-full ${inputCls} p-2.5 text-xs h-24 resize-none`} />
             <div className="text-[11px] text-gray-400 mt-1.5 leading-relaxed">US anti-spam law (CAN-SPAM) requires an opt-out and your physical mailing address in marketing emails. Replace the [brackets] with your details. <button onClick={() => saveEmailFooter(DEFAULT_FOOTER)} className="text-emerald-600 font-semibold hover:underline">Reset to default</button></div>
           </div>
+          <div className={`${cardCls} p-4 lg:col-span-2`}>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="text-sm font-bold text-gray-900">Email sequencer</div>
+              {webhookUrl
+                ? <span className="text-[10px] font-bold text-[#04231a] bg-[#48f4ad] rounded-full px-2 py-0.5 uppercase tracking-wide">Connected</span>
+                : <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 rounded-full px-2 py-0.5 uppercase tracking-wide">Optional</span>}
+            </div>
+            <div className="text-[12px] text-gray-500 mb-2">Send leads straight into your cold-email tool — no CSV downloads. Paste the webhook link from Zapier, Make, Instantly, or Smartlead once, and a <span className="font-semibold text-gray-700">⚡ Push to sequencer</span> button appears on every verified lead.</div>
+            <input
+              type="url"
+              value={webhookUrl}
+              onChange={(e) => saveWebhookUrl(e.target.value)}
+              placeholder="https://hooks.zapier.com/hooks/catch/…"
+              className={`w-full ${inputCls} px-3 py-2 text-xs font-mono`}
+            />
+            <div className="text-[11px] text-gray-400 mt-1.5">Each push sends their name, title, company, verified email, and your personalized icebreaker + email draft. Clear the box to disconnect.</div>
+          </div>
           <div className={`${cardCls} p-4`}>
             <div className="text-sm font-bold text-gray-900 mb-1">Daily goal</div>
             <div className="text-[13px] text-gray-800 font-semibold mb-2"><span className={sentToday >= dailyTarget ? 'text-rose-600' : 'text-emerald-600'}>{sentToday}</span> of {dailyTarget} sent today</div>
@@ -1121,6 +1177,9 @@ export default function CampaignWorkspace() {
                 <button onClick={() => { copy(renderFor(inviteNode.linkedin, selectedLead)); window.open(linkedInHref(selectedLead), '_blank', 'noopener'); }} className="text-[11px] font-semibold border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-lg px-2.5 py-1.5 hover:bg-emerald-100 inline-flex items-center gap-1.5"><Icon name="linkedin" className="w-3 h-3" /> Copy note &amp; open LinkedIn</button>
                 {selectedLead.verified_email && <a href={emailUrl(selectedLead, emailNode)} target="_blank" rel="noreferrer" className="text-[11px] font-semibold border border-gray-200 text-gray-600 rounded-lg px-2.5 py-1.5 hover:bg-gray-50 inline-flex items-center gap-1.5"><Icon name="mail" className="w-3 h-3" /> Email draft</a>}
                 <button onClick={() => sendInmail(selectedLead)} title="Copy your InMail message and open their profile (Sales Navigator — works even if you're not connected)" className="text-[11px] font-semibold border border-sky-200 bg-sky-50 text-sky-700 rounded-lg px-2.5 py-1.5 hover:bg-sky-100 inline-flex items-center gap-1.5"><Icon name="send" className="w-3 h-3" /> Copy InMail</button>
+                {webhookUrl && selectedLead.verified_email && (
+                  <button onClick={() => pushToSequencer(selectedLead)} title="Send this lead into your connected email sequencer and mark Contacted" className="text-[11px] font-bold text-[#04231a] bg-[#48f4ad] rounded-lg px-2.5 py-1.5 hover:brightness-105 inline-flex items-center gap-1.5"><Icon name="zap" className="w-3 h-3" /> Push to sequencer</button>
+                )}
               </div>
 
               {/* AI Outreach Composer */}
