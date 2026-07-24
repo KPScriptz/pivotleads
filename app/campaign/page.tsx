@@ -476,8 +476,11 @@ export default function CampaignWorkspace() {
     const supabase = getSupabase();
     if (!supabase || !authEmail || !authPw || authBusy) return;
     setAuthBusy(true); setAuthErr('');
-    const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim().toLowerCase(), password: authPw });
-    if (error) { setAuthErr('Wrong email or password. Try again.'); setAuthBusy(false); return; }
+    // Accept a bare username (e.g. "goat") — assume the team domain when there's no "@".
+    const id = authEmail.trim().toLowerCase();
+    const email = id.includes('@') ? id : `${id}@pivotxp.com`;
+    const { error } = await supabase.auth.signInWithPassword({ email, password: authPw });
+    if (error) { setAuthErr('Wrong username or password. Try again.'); setAuthBusy(false); return; }
     setAuthPw(''); setAuthBusy(false);
   };
   const signOut = async () => { await getSupabase()?.auth.signOut(); setLeads(INITIAL_DEMO_LEADS); };
@@ -682,8 +685,8 @@ export default function CampaignWorkspace() {
           </div>
           <form onSubmit={signIn} className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 space-y-3">
             <div>
-              <label className="block text-sm font-semibold text-gray-800 mb-1.5">Email</label>
-              <input type="email" value={authEmail} autoFocus autoComplete="email" onChange={(e) => { setAuthEmail(e.target.value); setAuthErr(''); }} placeholder="you@company.com" className={`w-full ${inputCls} px-3 py-2.5 text-sm`} />
+              <label className="block text-sm font-semibold text-gray-800 mb-1.5">Username or email</label>
+              <input type="text" value={authEmail} autoFocus autoComplete="username" onChange={(e) => { setAuthEmail(e.target.value); setAuthErr(''); }} placeholder="your username" className={`w-full ${inputCls} px-3 py-2.5 text-sm`} />
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-800 mb-1.5">Password</label>
