@@ -189,8 +189,7 @@ export default function CampaignWorkspace() {
 
   // People view
   const [search, setSearch] = useState('');
-  const [peopleFilter, setPeopleFilter] = useState<'All' | 'Ready' | 'Contacted'>('All');
-  const [showFilters, setShowFilters] = useState(false);
+  const [peopleFilter, setPeopleFilter] = useState<'All' | 'Ready' | 'Contacted'>('Ready');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [tagInput, setTagInput] = useState('');
@@ -346,17 +345,17 @@ export default function CampaignWorkspace() {
   };
 
   // Row-level 1-click copy: grab the personalized text, mark Contacted, sync the team.
+  // Copy only — no longer auto-marks Contacted, so you can grab both the note AND
+  // the email before marking. Use the "Mark contacted" button when you've sent.
   const quickCopyNote = (l: Lead) => {
     copy(renderFor(inviteNode.linkedin, l));
-    setStage(l.id, 'Contacted');
-    flash(`Copied LinkedIn note for ${(l.person_name || '').split(' ')[0] || 'lead'} — marked Contacted.`);
+    flash(`LinkedIn note for ${(l.person_name || '').split(' ')[0] || 'lead'} copied. Paste it, then hit “Mark contacted”.`);
   };
   const quickCopyEmail = (l: Lead) => {
     if (!l.verified_email) return;
     const subject = renderFor(emailNode.subject || 'Quick idea for {company}', l);
     copy(`Subject: ${subject}\n\n${renderFor(emailNode.email, l)}`);
-    setStage(l.id, 'Contacted');
-    flash(`Copied email for ${(l.person_name || '').split(' ')[0] || 'lead'} — marked Contacted.`);
+    flash(`Email for ${(l.person_name || '').split(' ')[0] || 'lead'} copied. Paste it, then hit “Mark contacted”.`);
   };
 
   // One-click push into the user's cold-email sequencer via their saved webhook.
@@ -423,6 +422,8 @@ export default function CampaignWorkspace() {
     { label: 'Replied', n: metrics.replied },
   ];
 
+  const contactedCount = active.filter((l) => isContacted(l.id)).length;
+  const toContactCount = active.length - contactedCount;
   const q = search.trim().toLowerCase();
   const filteredLeads = active.filter((l) => {
     if (peopleFilter === 'Ready' && isContacted(l.id)) return false;
@@ -853,22 +854,18 @@ export default function CampaignWorkspace() {
             </div>
             <div className="flex items-center gap-2 whitespace-nowrap">
               <button onClick={openFocus} className="inline-flex items-center gap-1.5 text-[11px] font-bold px-3 py-2 rounded-lg bg-[#48f4ad] text-[#04231a] hover:brightness-105 shadow-sm"><Icon name="play" className="w-3 h-3" />Fast queue</button>
-              <button onClick={() => setShowFilters((v) => !v)} className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-3 py-2 rounded-lg border transition-colors ${showFilters ? 'bg-gray-900 text-white border-gray-900' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}><Icon name="search" className="w-3 h-3" /> Filters</button>
-              <span className="text-[11px] text-gray-400 font-medium">{filteredLeads.length} {filteredLeads.length === 1 ? 'person' : 'people'}</span>
+              <span className="text-[11px] text-gray-400 font-medium">{filteredLeads.length} shown</span>
             </div>
           </div>
 
-          {/* Filters — hidden until opened (spec) */}
-          {showFilters && (
-            <div className={`${cardCls} p-3 flex items-center gap-2`}>
-              <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mr-1">Show</span>
-              <div className="inline-flex rounded-lg border border-gray-200 bg-gray-100 p-0.5">
-                {(['All', 'Ready', 'Contacted'] as const).map((f) => (
-                  <button key={f} onClick={() => setPeopleFilter(f)} className={`px-3 py-1 rounded-md text-[11px] font-semibold transition-all ${peopleFilter === f ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>{f}</button>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Sub-tabs — contacted people move to their own tab automatically */}
+          <div className="inline-flex rounded-lg border border-gray-200 bg-gray-100 p-0.5">
+            {([['Ready', 'To contact', toContactCount], ['Contacted', 'Contacted', contactedCount], ['All', 'All', active.length]] as ['Ready' | 'Contacted' | 'All', string, number][]).map(([key, label, count]) => (
+              <button key={key} onClick={() => setPeopleFilter(key)} className={`px-3 py-1.5 rounded-md text-[12px] font-semibold transition-all inline-flex items-center gap-1.5 ${peopleFilter === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                {label}<span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${peopleFilter === key ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-500'}`}>{count}</span>
+              </button>
+            ))}
+          </div>
 
           <div className={`${cardCls} overflow-hidden`}>
             <div className="overflow-x-auto">
@@ -926,9 +923,12 @@ export default function CampaignWorkspace() {
                               {lead.contacted_by && <span className="text-gray-400 font-medium">· {lead.contacted_by}</span>}
                             </span>
                           ) : (
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <button onClick={() => quickCopyNote(lead)} title="Copy the personalized LinkedIn note and mark Contacted" className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors"><Icon name="linkedin" className="w-3 h-3" /> Copy note</button>
-                              {lead.verified_email && <button onClick={() => quickCopyEmail(lead)} title="Copy the personalized email opener and mark Contacted" className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1.5 rounded-lg bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 transition-colors"><Icon name="mail" className="w-3 h-3" /> Copy email</button>}
+                            <div className="flex flex-col items-start gap-1.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <button onClick={() => quickCopyNote(lead)} title="Copy the personalized LinkedIn note (does not mark contacted)" className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1.5 rounded-lg bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 transition-colors"><Icon name="linkedin" className="w-3 h-3" /> Copy note</button>
+                                {lead.verified_email && <button onClick={() => quickCopyEmail(lead)} title="Copy the personalized email opener (does not mark contacted)" className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1.5 rounded-lg bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 transition-colors"><Icon name="mail" className="w-3 h-3" /> Copy email</button>}
+                              </div>
+                              <button onClick={() => setStage(lead.id, 'Contacted')} title="Mark contacted — moves them to the Contacted tab" className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-[#48f4ad] text-[#04231a] hover:brightness-105 transition-all"><span>✓</span> Mark contacted</button>
                             </div>
                           )}
                         </td>
@@ -1041,7 +1041,7 @@ export default function CampaignWorkspace() {
                 <div className="text-4xl font-black text-gray-900 mt-1">{ready.length}</div>
                 <div className="text-[11px] text-gray-500 mt-0.5">active people not yet contacted</div>
               </div>
-              <button onClick={() => { setActiveTab('People'); setPeopleFilter('Ready'); setShowFilters(true); }} className="text-[11px] font-bold text-white bg-gray-900 hover:bg-black rounded-lg px-3 py-1.5">Work them →</button>
+              <button onClick={() => { setActiveTab('People'); setPeopleFilter('Ready'); }} className="text-[11px] font-bold text-white bg-gray-900 hover:bg-black rounded-lg px-3 py-1.5">Work them →</button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className={`${cardCls} p-4`}>
